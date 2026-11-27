@@ -140,3 +140,24 @@ for (const tool of ["Agent", "Bash"]) {
     await expect(page.getByText("3m 5s", { exact: true })).toBeVisible();
   });
 }
+
+test("a lone timer centres on a one-line task header", async ({ page }) => {
+  await page.addInitScript(() => {
+    Date.now = () => Date.parse("2026-08-16T10:09:06Z");
+  });
+  await page.goto(
+    "/background-task-outcome?tool=Bash&loaded=1&running=1&noUsage=1&startedAt=2026-08-16T10:00:00Z",
+  );
+  const timer = page.getByText("9m 6s", { exact: true });
+  await expect(timer).toBeVisible();
+  const title = page.getByText("Review validation", { exact: true });
+  const pill = page.getByText("Running", { exact: true });
+  const centre = async (locator: typeof timer) => {
+    const box = await locator.boundingBox();
+    expect(box).not.toBeNull();
+    return box!.y + box!.height / 2;
+  };
+  const titleCentre = await centre(title);
+  expect(Math.abs((await centre(timer)) - titleCentre)).toBeLessThanOrEqual(1);
+  expect(Math.abs((await centre(pill)) - titleCentre)).toBeLessThanOrEqual(1);
+});

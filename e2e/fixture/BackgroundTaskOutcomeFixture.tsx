@@ -36,7 +36,10 @@ export function BackgroundTaskOutcomeFixture() {
           startedAt,
           ...(stopped ? { settledAt } : {}),
           ...(params.has("paused") ? { pausedMs: 65_000 } : {}),
-          usage: { totalTokens: 12_000, toolUses: 7, durationMs: 1_000 },
+          // A shell task reports no usage, leaving its timer alone in the rail.
+          ...(params.has("noUsage")
+            ? {}
+            : { usage: { totalTokens: 12_000, toolUses: 7, durationMs: 1_000 } }),
         }
       : outcomeTask
   ) satisfies NativeBackgroundTask;

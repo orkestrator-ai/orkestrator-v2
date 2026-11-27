@@ -3729,6 +3729,35 @@ describe("NativeMessage task list rendering", () => {
     }
   });
 
+  test("centres a lone background task timer on a one-line header", () => {
+    const startedAt = "2026-03-21T10:00:00.000Z";
+    const originalNow = Date.now;
+    Date.now = () => Date.parse(startedAt) + 125_000;
+    try {
+      renderInAppCommandScope(
+        <BackgroundTaskCard
+          task={{
+            id: "task-1",
+            description: "until grep -q DONE log",
+            status: "running",
+            startedAt,
+          }}
+          command="until grep -q DONE log"
+          open={false}
+          onOpenChange={() => {}}
+          onStop={async () => true}
+        />,
+      );
+
+      const rail = screen.getByText("2m 5s").parentElement;
+      expect(getClassTokens(rail)).toContain("self-center");
+      expect(getClassTokens(rail)).not.toContain("self-stretch");
+      expect(getClassTokens(screen.getByText("2m 5s"))).not.toContain("mt-auto");
+    } finally {
+      Date.now = originalNow;
+    }
+  });
+
   test("freezes a completed background task timer at its backend settle clock", () => {
     renderInAppCommandScope(
       <BackgroundTaskCard

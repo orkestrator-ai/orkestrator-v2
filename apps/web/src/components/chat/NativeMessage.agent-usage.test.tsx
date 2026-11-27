@@ -6,6 +6,10 @@ import { NativeMessage } from "./NativeMessage";
 
 afterEach(cleanup);
 
+function getClassTokens(element: Element | null | undefined): string[] {
+  return element?.getAttribute("class")?.split(/\s+/).filter(Boolean) ?? [];
+}
+
 type UsageFields = Pick<NativeMessagePart, "tokenCountText" | "toolUseCount" | "agentUsageDisplay">;
 const action: NativeMessagePart = {
   type: "tool-invocation",
@@ -152,6 +156,17 @@ for (const path of ["subagent", "task-group"] as const) {
       const { container } = renderUsage(path, {}, "claude", []);
       expect(container.querySelector("button [title]") === null).toBe(true);
       expect(screen.getByText("2m 5s")).toBeTruthy();
+    });
+
+    test("a lone runtime centres on a one-line header; beside usage it sits at the bottom", () => {
+      // Cursor with nothing to preview: one line, runtime only.
+      renderUsage(path, {}, "cursor", []);
+      expect(getClassTokens(screen.getByText("2m 5s").parentElement)).toContain("self-center");
+      cleanup();
+      renderUsage(path, { toolUseCount: 8 });
+      const rail = screen.getByText("2m 5s").parentElement;
+      expect(getClassTokens(rail)).toContain("self-end");
+      expect(getClassTokens(rail)).not.toContain("self-center");
     });
 
     test("runtime sits behind a stopwatch in the same size and colour as the counts", () => {

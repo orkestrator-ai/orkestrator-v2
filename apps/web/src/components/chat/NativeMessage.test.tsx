@@ -10,7 +10,7 @@ import {
   setSystemTime,
 } from "bun:test";
 import { useEffect, useState } from "react";
-import { act, cleanup, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, cleanup, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { renderInAppCommandScope } from "@/test/render-in-node-scope";
 import {
   COORDINATOR_DELEGATION_FRAME_OPEN,
@@ -4068,6 +4068,37 @@ describe("NativeMessage task list rendering", () => {
       ).toBe(true);
     });
   }
+
+  test("centres a lone timer on a one-line background Agent header", () => {
+    renderInAppCommandScope(
+      <NativeMessage
+        platform="cursor"
+        message={makeMessage([
+          makeAgentTaskGroupPart({
+            task: {
+              toolState: "success",
+              toolArgs: { description: "Review validation" },
+              backgroundTask: {
+                id: "cursor-agent",
+                status: "completed",
+                startedAt: "2026-03-21T10:00:00.000Z",
+                settledAt: "2026-03-21T10:02:05.000Z",
+              },
+            },
+          }),
+        ])}
+      />,
+    );
+
+    const trigger = screen.getByRole("button", { name: /Agent Review validation Completed/ });
+    const timer = within(trigger).getByText("2m 5s");
+    const rail = timer.parentElement;
+    expect(getClassTokens(rail?.parentElement)).toContain("items-center");
+    expect(rail?.children).toHaveLength(1);
+    expect(getClassTokens(rail)).toContain("self-center");
+    expect(getClassTokens(rail)).not.toContain("self-stretch");
+    expect(getClassTokens(timer)).not.toContain("mt-auto");
+  });
 
   test("retains update-only captured activity on a background Agent", () => {
     renderInAppCommandScope(

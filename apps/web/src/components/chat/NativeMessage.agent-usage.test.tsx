@@ -158,11 +158,32 @@ for (const path of ["subagent", "task-group"] as const) {
       expect(screen.getByText("2m 5s")).toBeTruthy();
     });
 
-    test("a lone runtime centres on a one-line header; beside usage it sits at the bottom", () => {
-      // Cursor with nothing to preview: one line, runtime only.
+    test("centres a lone runtime on a one-line header", () => {
       renderUsage(path, {}, "cursor", []);
       expect(getClassTokens(screen.getByText("2m 5s").parentElement)).toContain("self-center");
-      cleanup();
+    });
+
+    test("bottom-aligns the runtime when tokens appear on a one-line header", () => {
+      renderUsage(path, { tokenCountText: "980 tokens" }, "cursor", []);
+      const token = assertStat("980 tokens", "980", "coins");
+      const rail = screen.getByText("2m 5s").parentElement;
+      expect(rail?.contains(token)).toBe(true);
+      expect(getClassTokens(rail?.parentElement)).toContain("items-center");
+      expect(getClassTokens(rail)).toContain("self-end");
+      expect(getClassTokens(rail)).not.toContain("self-center");
+    });
+
+    test("bottom-aligns a lone runtime when a preview appears", () => {
+      const preview = "Checked the test results.";
+      renderUsage(path, {}, "cursor", [{ type: "text", content: preview }]);
+      const rail = screen.getByText("2m 5s").parentElement;
+      expect(rail?.parentElement?.contains(screen.getByText(preview))).toBe(true);
+      expect(rail?.children).toHaveLength(1);
+      expect(getClassTokens(rail)).toContain("self-end");
+      expect(getClassTokens(rail)).not.toContain("self-center");
+    });
+
+    test("bottom-aligns the runtime when both usage and a preview appear", () => {
       renderUsage(path, { toolUseCount: 8 });
       const rail = screen.getByText("2m 5s").parentElement;
       expect(getClassTokens(rail)).toContain("self-end");

@@ -387,6 +387,16 @@ function UsageStatsRow({
   );
 }
 
+/**
+ * Where a header's right rail sits. Beside usage, or under a header with a
+ * second line, the timer is the bottom row. A timer alone on a one-line
+ * header has no row to share, so it centres on that line like the title,
+ * status pill and chevron.
+ */
+function loneTimerCentred(hasUsage: boolean, singleLine: boolean): boolean {
+  return !hasUsage && singleLine;
+}
+
 function AgentUsageStats({
   hasExternalUsage,
   tokenOnlyUsage,
@@ -394,6 +404,7 @@ function AgentUsageStats({
   toolCount,
   updateCount,
   durationLabel,
+  singleLine,
 }: {
   hasExternalUsage: boolean;
   tokenOnlyUsage: boolean;
@@ -401,12 +412,20 @@ function AgentUsageStats({
   toolCount: number;
   updateCount: number;
   durationLabel?: string;
+  /** The header has no preview line under its title. */
+  singleLine: boolean;
 }) {
   const hideCounts = useContext(AgentPlatformContext) === "cursor";
   if (hideCounts || tokenOnlyUsage) {
     if (!durationLabel && !tokenCountText) return null;
+    const centred = loneTimerCentred(Boolean(tokenCountText), singleLine);
     return (
-      <div className="flex shrink-0 self-end flex-col items-end gap-1">
+      <div
+        className={cn(
+          "flex shrink-0 flex-col items-end gap-1",
+          centred ? "self-center" : "self-end",
+        )}
+      >
         <UsageStatsRow tokenCountText={tokenCountText} />
         <RuntimeLabel value={durationLabel} />
       </div>
@@ -420,9 +439,12 @@ function AgentUsageStats({
   const toolCountLabel = hasExternalUsage
     ? formatToolUseCount(toolCount)
     : `${toolCount} ${toolCount === 1 ? "tool" : "tools"}`;
+  const centred = loneTimerCentred(showTools || showUpdates, singleLine);
 
   return (
-    <div className="flex shrink-0 self-end flex-col items-end gap-1">
+    <div
+      className={cn("flex shrink-0 flex-col items-end gap-1", centred ? "self-center" : "self-end")}
+    >
       <UsageStatsRow
         toolUses={showTools ? toolCount : undefined}
         toolLabel={toolCountLabel}
@@ -699,10 +721,13 @@ function formatToolUseCount(count: number): string {
 function BackgroundTaskRail({
   usage,
   durationLabel,
+  singleLine,
   className,
 }: {
   usage: BackgroundTaskUsageCounts;
   durationLabel?: string;
+  /** The header has no preview line under its title. */
+  singleLine: boolean;
   className?: string;
 }) {
   const hasUsage =
@@ -710,10 +735,12 @@ function BackgroundTaskRail({
     usage.tokenCountText !== undefined ||
     usage.updates !== undefined;
   if (!hasUsage && !durationLabel) return null;
+  const centred = loneTimerCentred(hasUsage, singleLine);
   return (
     <div
       className={cn(
-        "flex shrink-0 self-stretch flex-col items-end justify-between gap-1",
+        "flex shrink-0 flex-col items-end gap-1",
+        centred ? "self-center" : "self-stretch justify-between",
         className,
       )}
     >
@@ -722,8 +749,8 @@ function BackgroundTaskRail({
         tokenCountText={usage.tokenCountText}
         updates={usage.updates}
       />
-      {/* A lone timer still sits bottom-right, where it does beside usage. */}
-      <RuntimeLabel value={durationLabel} className="mt-auto" />
+      {/* Under a preview line a lone timer still sits bottom-right, where it does beside usage. */}
+      <RuntimeLabel value={durationLabel} className={centred ? undefined : "mt-auto"} />
     </div>
   );
 }
@@ -1203,6 +1230,7 @@ export function BackgroundTaskCard({
           <BackgroundTaskRail
             usage={usage}
             durationLabel={durationLabel}
+            singleLine={!hasPreview}
             className={workflow ? "max-sm:flex-row max-sm:items-center max-sm:gap-2" : undefined}
           />
           <ChevronRight
@@ -1327,6 +1355,7 @@ export function SubagentPart({
             toolCount={toolCount}
             updateCount={subagentActions.length}
             durationLabel={durationLabel}
+            singleLine={!preview.text}
           />
           <ChevronRight
             className={cn(
@@ -1595,7 +1624,11 @@ export function TaskGroupPart({
               ) : null}
             </div>
             {backgroundUsage ? (
-              <BackgroundTaskRail usage={backgroundUsage} durationLabel={durationLabel} />
+              <BackgroundTaskRail
+                usage={backgroundUsage}
+                durationLabel={durationLabel}
+                singleLine={!preview}
+              />
             ) : (
               <AgentUsageStats
                 hasExternalUsage={hasExternalUsage}
@@ -1604,6 +1637,7 @@ export function TaskGroupPart({
                 toolCount={toolCount}
                 updateCount={childCount}
                 durationLabel={durationLabel}
+                singleLine={!preview}
               />
             )}
             <ChevronRight

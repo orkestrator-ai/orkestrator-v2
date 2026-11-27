@@ -195,6 +195,53 @@ describe("leaf launch authority", () => {
     expect(effective?.warnings.join(" ")).toContain("unreachable");
   });
 
+  test.each(["epoch", "applied digest", "age"] as const)(
+    "offline preflight rejects a cached answer when its %s changes during evidence collection",
+    async (change) => {
+      const { desktop, gram } = await fleet();
+      await addSkill(desktop, "docs", "Write docs.", { required: true });
+      const request = launch("offline-recheck");
+      await expect(gram.cap.preflightSession(request)).resolves.toBeTruthy();
+      gram.reachable = false;
+      const read = gram.cap.observeSelf.bind(gram.cap);
+      const started = Promise.withResolvers<void>();
+      const release = Promise.withResolvers<void>();
+      const observe = spyOn(gram.cap, "observeSelf").mockImplementation(async (options) => {
+        const result = await read(options);
+        if (options?.managedPluginComponents) {
+          started.resolve();
+          await release.promise;
+        }
+        return result;
+      });
+      try {
+        const preflight = gram.cap.preflightSession(request);
+        expect(await Promise.race([started.promise.then(() => "checking"), preflight])).toBe(
+          "checking",
+        );
+        if (change === "age") {
+          gram.cap.leafLaunch.cacheMaxAgeMs = -1;
+        } else {
+          gram.storage.capabilities.mutateCapabilityExecutorState((state) => {
+            if (change === "epoch") state.epoch += 1;
+            else {
+              state.applied["bk_gram|elsewhere|x"] = {
+                digest: "sha256:0",
+                at: "2026-11-19",
+                action: "install",
+              };
+            }
+          });
+        }
+        release.resolve();
+        await expect(preflight).rejects.toThrow(COMMAND_NODE_UNREACHABLE_REASON.slice(0, 40));
+      } finally {
+        release.resolve();
+        observe.mockRestore();
+      }
+    },
+  );
+
   test("a stale controller's answer is refused by the leaf", async () => {
     const { gram } = await fleet();
     await gram.cap.executorObserve({ controllerId: "bk_newer", epoch: 7 });

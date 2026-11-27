@@ -14,6 +14,7 @@ import * as fs from "node:fs/promises";
 import path from "node:path";
 
 import type { AgentPlatform } from "@orkestrator/protocol/agent-platforms";
+import { canonicalJson } from "@orkestrator/protocol/canonical-json";
 import {
   MCP_MANAGEMENT_LIMITS,
   MCP_MANAGEMENT_PROTOCOL_VERSION,
@@ -233,7 +234,10 @@ export class McpManagementService {
   private readonly now: () => number;
   private readonly homes: ProviderHomes;
   private readonly gate: McpRolloutGate;
-  private readonly hostSourceRevisions = new Map<string, string>();
+  private readonly hostSourceRevisions = new Map<
+    string,
+    { revision: string; fingerprint: string }
+  >();
   private catalogRevision = 0;
   private eventRevision = 0;
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -451,12 +455,31 @@ export class McpManagementService {
     if (!revision) return;
     const file = source.spec.path;
     const previous = this.hostSourceRevisions.get(file);
+    if (savedRevision === undefined && previous?.revision === revision) return;
+    let fingerprint = revision;
+    if (source.spec.sourceId === "claude:user" && source.parsed) {
+      // Claude rewrites this file for its own bookkeeping. Observe just its
+      // MCP declarations and their parse status for inventory invalidation.
+      try {
+        fingerprint = contentDigest(
+          Buffer.from(
+            canonicalJson({
+              entries: Object.fromEntries(source.parsed.entries),
+              issues: Object.fromEntries(source.parsed.entryIssues),
+              addBlock: source.parsed.addBlock ?? null,
+            }),
+          ),
+        );
+      } catch {
+        // Preserve byte-level change detection for a non-canonical document.
+      }
+    }
     if (previous === undefined && this.hostSourceRevisions.size >= HOST_SOURCE_REVISIONS_MAX) {
       const oldest = this.hostSourceRevisions.keys().next().value;
       if (oldest !== undefined) this.hostSourceRevisions.delete(oldest);
     }
-    this.hostSourceRevisions.set(file, revision);
-    if (savedRevision !== undefined || (previous !== undefined && previous !== revision)) {
+    this.hostSourceRevisions.set(file, { revision, fingerprint });
+    if (savedRevision !== undefined || (previous && previous.fingerprint !== fingerprint)) {
       this.options.onHostConfigChange();
     }
   }
@@ -749,7 +772,9 @@ export class McpManagementService {
                   maxBytes: spec.maxBytes,
                 })
               ).revision;
-        if (!unchanged && savedRevision) this.observeHostSource(source, savedRevision);
+        if (!unchanged && savedRevision) {
+          this.observeHostSource({ ...source, parsed: savedParsed ?? null }, savedRevision);
+        }
         // The exact bytes now in the file, in the format bridges report.
         const savedDigest = unchanged
           ? source.file!.contentDigest

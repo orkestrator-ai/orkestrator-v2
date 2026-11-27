@@ -746,7 +746,10 @@ function requiredManagedPlugins(answer: Pick<LeafAnswer, "required" | "deliverie
 export interface LeafLaunchAuthorityDeps {
   storage: { capabilities: CapabilitiesStorage };
   /** This machine's launch evidence, plus any requested managed Claude components. */
-  observeSelf(managedPluginComponents?: readonly string[]): Promise<CapabilityInventory>;
+  observeSelf(
+    managedPluginComponents?: readonly string[],
+    pluginListingScope?: object,
+  ): Promise<CapabilityInventory>;
   /** Indexed components to report to a command node that predates scoped plugin observations. */
   managedPluginComponents?(): Promise<string[]>;
   admitEpoch(controllerId: string, epoch: number): void;
@@ -771,6 +774,7 @@ export interface LeafLaunchAuthorityDeps {
 interface PendingRequest {
   key: string;
   target: CapabilityTarget;
+  pluginListingScope?: object;
   extendForManagedEvidence?: () => void;
   settle(answer: { answer: LeafAnswer; controllerId: string; epoch: number } | null): void;
 }
@@ -799,9 +803,10 @@ export class LeafLaunchAuthority {
       .scopedReport?.(request.target, request.relativeWorktree)
       .catch(() => undefined);
     const key = launchCacheKey(request);
+    const pluginListingScope = {};
     let answered =
       this.deps.request && (await this.deps.controllerReachable().catch(() => false))
-        ? await this.ask(request, key, inventory, report)
+        ? await this.ask(request, key, inventory, report, pluginListingScope)
         : null;
     if (
       answered &&
@@ -809,11 +814,22 @@ export class LeafLaunchAuthority {
       request.target.provider === "claude" &&
       request.target.environmentIncarnation === undefined
     ) {
-      const components = await this.deps.managedPluginComponents?.().catch(() => []);
+      const { resolvedPackages, launchBlockers } = answered.answer.effective;
+      const selected = new Set([
+        ...resolvedPackages.flatMap((pkg) => pkg.components),
+        ...launchBlockers.map((blocker) => blocker.componentId),
+      ]);
+      const components = selected.size
+        ? (await this.deps.managedPluginComponents?.().catch(() => []))?.filter((id) =>
+            selected.has(id),
+          )
+        : undefined;
       if (components?.length) {
-        const legacyInventory = await this.deps.observeSelf(components).catch(() => undefined);
+        const legacyInventory = await this.deps
+          .observeSelf(components, pluginListingScope)
+          .catch(() => undefined);
         if (legacyInventory) {
-          answered = (await this.ask(request, key, legacyInventory, report, false)) ?? answered;
+          answered = (await this.ask(request, key, legacyInventory, report)) ?? answered;
         }
       }
     }
@@ -834,7 +850,9 @@ export class LeafLaunchAuthority {
     // (`localDeliveryCheck`); an answer requiring none reuses the first read.
     const [latestInventory, latestReport] = await Promise.all([
       answered?.answer.required.length
-        ? this.deps.observeSelf(requiredManagedPlugins(answered.answer)).catch(() => undefined)
+        ? this.deps
+            .observeSelf(requiredManagedPlugins(answered.answer), pluginListingScope)
+            .catch(() => undefined)
         : inventory,
       this.deps.scopedReport?.(request.target, request.relativeWorktree).catch(() => undefined),
     ]);
@@ -879,7 +897,7 @@ export class LeafLaunchAuthority {
     key: string,
     inventory: CapabilityInventory | undefined,
     report: LeafScopedReport | undefined,
-    scopedManagedPlugins = true,
+    pluginListingScope?: object,
   ): Promise<{ answer: LeafAnswer; controllerId: string; epoch: number } | null> {
     const requestId = `cap_launch_${randomBytes(12).toString("hex")}`;
     return new Promise((resolve) => {
@@ -889,6 +907,7 @@ export class LeafLaunchAuthority {
         const entry = this.pending.get(requestId);
         if (entry) {
           delete entry.extendForManagedEvidence;
+          delete entry.pluginListingScope;
           entry.settle = () => this.pending.delete(requestId);
         }
         setTimeout(() => this.pending.delete(requestId), 60_000).unref?.();
@@ -899,10 +918,11 @@ export class LeafLaunchAuthority {
       this.pending.set(requestId, {
         key,
         target: request.target,
-        ...(scopedManagedPlugins &&
+        ...(pluginListingScope &&
         request.target.provider === "claude" &&
         request.target.environmentIncarnation === undefined
           ? {
+              pluginListingScope,
               extendForManagedEvidence: () => {
                 clearTimeout(timer);
                 const elapsed = performance.now() - startedAt;
@@ -932,7 +952,7 @@ export class LeafLaunchAuthority {
             ...(request.graphNode ? { graphNode: request.graphNode } : {}),
             ...(request.relativeWorktree ? { relativeWorktree: request.relativeWorktree } : {}),
             inventory: compactInventory(inventory),
-            ...(scopedManagedPlugins ? { scopedManagedPlugins: true } : {}),
+            ...(pluginListingScope ? { scopedManagedPlugins: true } : {}),
             ...(report ? { scoped: report } : {}),
           },
         });
@@ -944,11 +964,12 @@ export class LeafLaunchAuthority {
   }
 
   /** A fenced observation requested the plugin evidence for this pending launch. */
-  expectManagedPluginEvidence(requestId: string): void {
+  expectManagedPluginEvidence(requestId: string): object | undefined {
     const pending = this.pending.get(requestId);
-    if (!pending?.extendForManagedEvidence) return;
-    pending.extendForManagedEvidence();
+    if (!pending) return undefined;
+    pending.extendForManagedEvidence?.();
     delete pending.extendForManagedEvidence;
+    return pending.pluginListingScope;
   }
 
   /** `answer_capability_node_launch`: only this machine's current authority is heard. */
@@ -1075,20 +1096,28 @@ export class LeafLaunchAuthority {
     key: string,
     report: LeafScopedReport | undefined,
   ): Promise<LeafLaunchResult> {
-    const state = await this.deps.storage.capabilities.loadCapabilityState();
-    const executor = await this.deps.storage.capabilities.loadCapabilityExecutorState();
+    let state = await this.deps.storage.capabilities.loadCapabilityState();
+    let executor = await this.deps.storage.capabilities.loadCapabilityExecutorState();
     const cached: LeafLaunchAnswerRecord | undefined = state.leafAuthority?.answers[key];
-    const maxAge = this.cacheMaxAgeMs;
-    const fresh =
-      cached !== undefined &&
-      Date.parse(this.deps.now()) - Date.parse(cached.receivedAt) <= maxAge &&
-      cached.controllerId === executor.controllerId &&
-      cached.epoch === executor.epoch &&
-      cached.appliedDigest === appliedDigest(executor);
-    if (cached && fresh) {
-      const liveInventory = cached.required.length
-        ? await this.deps.observeSelf(requiredManagedPlugins(cached)).catch(() => undefined)
-        : undefined;
+    const isFresh = (answer: LeafLaunchAnswerRecord) =>
+      Date.parse(this.deps.now()) - Date.parse(answer.receivedAt) <= this.cacheMaxAgeMs &&
+      answer.controllerId === executor.controllerId &&
+      answer.epoch === executor.epoch &&
+      answer.appliedDigest === appliedDigest(executor);
+    let liveInventory: CapabilityInventory | undefined;
+    let current = cached !== undefined && isFresh(cached);
+    if (cached?.required.length && current) {
+      liveInventory = await this.deps
+        .observeSelf(requiredManagedPlugins(cached))
+        .catch(() => undefined);
+      [state, executor] = await Promise.all([
+        this.deps.storage.capabilities.loadCapabilityState(),
+        this.deps.storage.capabilities.loadCapabilityExecutorState(),
+      ]);
+      const latest = state.leafAuthority?.answers[key];
+      current = isFresh(cached) && JSON.stringify(latest) === JSON.stringify(cached);
+    }
+    if (cached && current) {
       const local = this.localDeliveryCheck(cached, liveInventory, report, request.target);
       const effective: EffectiveAgentResources = {
         ...cached.effective,
@@ -1108,7 +1137,9 @@ export class LeafLaunchAuthority {
       };
     }
     const requiredKnown =
-      state.leafAuthority?.requiredOnNode?.value === true || (cached?.required.length ?? 0) > 0;
+      state.leafAuthority?.requiredOnNode?.value === true ||
+      (state.leafAuthority?.answers[key]?.required.length ?? 0) > 0 ||
+      (cached?.required.length ?? 0) > 0;
     // A container this machine created while the command node was away holds nothing.
     const container = report?.container;
     const unstaged =

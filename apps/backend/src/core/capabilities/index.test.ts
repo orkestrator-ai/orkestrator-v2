@@ -126,6 +126,39 @@ test("MCP host saves and detected edits invalidate listings while Apply shares t
   }
 });
 
+test("Claude bookkeeping leaves discovery cached while changing a server invalidates it", async () => {
+  let reads = 0;
+  const cache = new InventoryPluginCache(async () => {
+    reads += 1;
+    return { plugins: [] };
+  });
+  const fixture = createFixture({ onHostConfigChange: () => cache.invalidate() });
+  try {
+    const targetId = await targetIdFor(fixture, "claude", "backend");
+    const write = (numStartups: number, command: string) =>
+      fixture.write(
+        "home/.claude.json",
+        JSON.stringify({ numStartups, mcpServers: { docs: { command } } }),
+      );
+    write(1, "docs-mcp");
+    const before = await fixture.service.snapshot({ targetId });
+    const first = cache.read();
+    await first;
+
+    write(2, "docs-mcp");
+    const after = await fixture.service.snapshot({ targetId });
+    expect(revision(after, "claude:user")).not.toBe(revision(before, "claude:user"));
+    expect(cache.read()).toBe(first);
+
+    write(3, "changed-mcp");
+    await fixture.service.snapshot({ targetId });
+    await cache.read();
+    expect(reads).toBe(2);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
 test.each([true, false])(
   "a Codex switch invalidates after the write (confirmation succeeds: %s)",
   async (confirm) => {

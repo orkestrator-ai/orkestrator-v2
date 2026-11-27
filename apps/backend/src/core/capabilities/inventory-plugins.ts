@@ -14,15 +14,16 @@ import { boundedWait } from "@orkestrator/protocol/node/bounded-wait";
 
 import { CommandFailedError } from "../command-capture.js";
 import {
+  claudePluginItems,
   discoverAgentPlugins,
-  parseClaudePlugins,
+  parseClaudeJsonOutput,
   type AgentPluginCatalog,
   type ExtensionCommandRunner,
 } from "../extension-discovery.js";
 import type { InventoryPlugin, InventoryPluginListing } from "./inventory.js";
 import { InventoryPluginCache } from "./inventory-cache.js";
 import {
-  parseClaudePluginList,
+  claudeInstalledPlugins,
   type ClaudePluginAdapter,
   type ClaudeInstalledPlugin,
   type ManagedClaudePluginObservation,
@@ -35,15 +36,6 @@ const log = createLogger("capabilities");
 
 /** How long one agent's plugin listing may take before the inventory reports it unreadable. */
 export const INVENTORY_PLUGIN_LIST_TIMEOUT_MS = 5_000;
-
-/**
- * How old a settled Claude listing may be to serve launch evidence. Long
- * enough for a leaf's two reads of one launch (its command node's fenced
- * observation, then its own recheck after the answer) to share one listing;
- * short enough that a plugin switched outside Orkestrator is seen by the next
- * launch. Full reads use the cache's whole window.
- */
-export const LAUNCH_PLUGIN_LISTING_MAX_AGE_MS = 15_000;
 
 /** The providers whose plugins the inventory lists. */
 export const INVENTORY_PLUGIN_PROVIDERS = ["claude", "codex", "grok", "opencode", "pi"] as const;
@@ -129,45 +121,58 @@ export function inventoryPluginLister(input: {
 }
 
 /**
- * Managed and unmanaged Claude inventory share one CLI result, and readers
- * share it the way the other providers' listings are shared: one listing in
- * flight, a settled one served for the cache window (a launch accepts only a
- * listing under `LAUNCH_PLUGIN_LISTING_MAX_AGE_MS` old), and none served
- * across a change this machine applied. `refresh` lists again.
+ * Full inventory shares one CLI result for both Claude projections. Launch
+ * evidence starts a fresh listing, reusable by the two checks of one leaf
+ * launch while the plugin configuration is unchanged.
  */
 export function createClaudeInventoryPluginSource(input: {
   adapter: ClaudePluginAdapter;
   cli: ProviderCli;
   includeUnmanaged: boolean;
   timeoutMs?: number;
-  launchMaxAgeMs?: number;
   ttlMs?: number;
   now?: () => number;
 }) {
   const timeoutMs = input.timeoutMs ?? INVENTORY_PLUGIN_LIST_TIMEOUT_MS;
-  const launchMaxAgeMs = input.launchMaxAgeMs ?? LAUNCH_PLUGIN_LISTING_MAX_AGE_MS;
   const reportTimeout = timeoutReporter(timeoutMs);
-  const cache = new InventoryPluginCache(
-    async () => {
-      const answer = await boundedWait(input.cli(["plugin", "list", "--json"]), timeoutMs).catch(
-        () => undefined,
-      );
-      const timedOut = answer !== undefined && (!answer.settled || answer.value.timedOut === true);
-      reportTimeout("claude", timedOut);
-      const stdout =
-        answer?.settled && !timedOut && answer.value.exitCode === 0
-          ? answer.value.stdout
-          : undefined;
-      const managed = stdout === undefined ? null : parseClaudePluginList(stdout);
-      const unmanaged =
-        input.includeUnmanaged && stdout !== undefined ? parseClaudePlugins(stdout) : [];
-      return { managed, unmanaged, timedOut };
-    },
-    {
-      ...(input.ttlMs !== undefined ? { ttlMs: input.ttlMs } : {}),
-      ...(input.now ? { now: input.now } : {}),
-    },
-  );
+  const load = async () => {
+    const answer = await boundedWait(input.cli(["plugin", "list", "--json"]), timeoutMs).catch(
+      () => undefined,
+    );
+    const timedOut = answer !== undefined && (!answer.settled || answer.value.timedOut === true);
+    reportTimeout("claude", timedOut);
+    const answered = answer?.settled && !timedOut && answer.value.exitCode === 0;
+    const parsed = answered ? parseClaudeJsonOutput(answer.value.stdout) : undefined;
+    if (answered && parsed === undefined) {
+      throw new CapabilityError("source-unavailable", "Claude's plugin list could not be read.");
+    }
+    return { parsed, timedOut };
+  };
+  const cache = new InventoryPluginCache(load, { ttlMs: input.ttlMs, now: input.now });
+  const launches = new WeakMap<
+    object,
+    { generation: number; revision: string; listing: ReturnType<typeof load> }
+  >();
+
+  async function readLaunch(scope: object): ReturnType<typeof load> {
+    const revision = await input.adapter.pluginListingRevision();
+    const generation = cache.generation;
+    let entry = launches.get(scope);
+    if (!entry || entry.generation !== generation || entry.revision !== revision) {
+      const listing = load();
+      if (revision === undefined) return listing;
+      entry = { generation, revision, listing };
+      launches.set(scope, entry);
+    }
+    const result = await entry.listing;
+    if (
+      (await input.adapter.pluginListingRevision()) !== revision ||
+      cache.generation !== generation
+    ) {
+      throw new CapabilityError("source-unavailable", "Claude's plugin configuration changed.");
+    }
+    return result;
+  }
 
   return {
     invalidate: () => cache.invalidate(),
@@ -176,10 +181,9 @@ export function createClaudeInventoryPluginSource(input: {
     ): Pick<import("./inventory.js").InventorySources, "managedPlugins" | "plugins"> {
       let listing: ReturnType<typeof cache.read> | undefined;
       const read = () =>
-        (listing ??= cache.read({
-          refresh: options.refresh === true,
-          ...(options.launch ? { maxAgeMs: launchMaxAgeMs } : {}),
-        }));
+        (listing ??= options.launch
+          ? readLaunch(options.pluginListingScope ?? {})
+          : cache.read({ refresh: options.refresh }));
       return {
         ...(options.launch && !options.managedPluginComponents?.length
           ? {}
@@ -189,7 +193,8 @@ export function createClaudeInventoryPluginSource(input: {
                   options.launch ? new Set(options.managedPluginComponents) : undefined,
                   async (): Promise<ClaudeInstalledPlugin[]> => {
                     // The installed bytes are verified live from these paths.
-                    const { managed } = await read();
+                    const { parsed } = await read();
+                    const managed = claudeInstalledPlugins(parsed);
                     if (!managed) {
                       throw new CapabilityError(
                         "source-unavailable",
@@ -203,9 +208,9 @@ export function createClaudeInventoryPluginSource(input: {
         ...(!options.launch && input.includeUnmanaged
           ? {
               plugins: async (): Promise<InventoryPluginListing> => {
-                const { unmanaged, timedOut } = await read();
+                const { parsed, timedOut } = await read();
                 return {
-                  plugins: unmanaged.map((plugin) => ({
+                  plugins: claudePluginItems(parsed).map((plugin) => ({
                     provider: "claude",
                     qualifiedId: plugin.qualifiedId ?? plugin.name,
                     name: plugin.name,

@@ -4,8 +4,9 @@
  * when an applicable managed plugin needs verification. Readers share one
  * listing in its window, and a change this machine applies lists again.
  */
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, jest, spyOn, test } from "bun:test";
 import { promises as fs } from "node:fs";
+import path from "node:path";
 
 import { MY_SETUP_ID } from "@orkestrator/protocol/capability-resources";
 import type { NodeRoute } from "@orkestrator/protocol/command-nodes";
@@ -30,11 +31,13 @@ import {
   createClaudeInventoryPluginSource,
   inventoryPluginLister,
   inventoryPluginTimeoutMessage,
-  LAUNCH_PLUGIN_LISTING_MAX_AGE_MS,
 } from "./inventory-plugins.js";
 
 import type { CapabilityHomes } from "./native-ownership.js";
-import { ClaudePluginAdapter } from "./provider-adapters/claude-plugins.js";
+import {
+  ClaudePluginAdapter,
+  ORKESTRATOR_CLAUDE_MARKETPLACE,
+} from "./provider-adapters/claude-plugins.js";
 import { FakeClaudeCli } from "./provider-adapters/fake-claude-cli.test-support.js";
 
 let logs: LogCapture;
@@ -52,7 +55,7 @@ afterEach(async () => {
 const LIST_TIMEOUT_MS = 100;
 
 /** Provider plugin listings where Codex never answers, counting each agent's runs. */
-function hungCodexListings() {
+function hungCodexListings(providers?: Parameters<typeof inventoryPluginLister>[0]["providers"]) {
   const runs = new Map<string, number>();
   const extra: string[] = [];
   const discover = async (
@@ -76,7 +79,7 @@ function hungCodexListings() {
     /** Plugins Claude lists from now on. */
     extra,
     total: () => [...runs.values()].reduce((sum, count) => sum + count, 0),
-    plugins: inventoryPluginLister({ run, timeoutMs: LIST_TIMEOUT_MS, discover }),
+    plugins: inventoryPluginLister({ run, timeoutMs: LIST_TIMEOUT_MS, discover, providers }),
   };
 }
 
@@ -259,21 +262,26 @@ test("remote Test verifies the managed file without starting cold plugin discove
   expect(listings.total()).toBe(runs);
 });
 
-function managedClaude() {
+function managedClaude(formatOutput = (stdout: string) => stdout) {
   let hangs = false;
   let listings = 0;
   let clock = 1_000_000;
+  let fake: FakeClaudeCli;
+  let beforeListing: (() => Promise<void>) | undefined;
   return {
     deps(homes: CapabilityHomes) {
-      const fake = new FakeClaudeCli(homes.claudeConfigDir);
+      fake = new FakeClaudeCli(homes.claudeConfigDir);
       const adapter = new ClaudePluginAdapter({ homes: () => homes, cli: fake.cli });
       return {
         claudePlugins: adapter,
         claudeInventory: createClaudeInventoryPluginSource({
           adapter,
-          cli: (args) => {
+          cli: async (args) => {
             listings += 1;
-            return hangs ? new Promise<never>(() => undefined) : fake.cli(args);
+            if (hangs) return new Promise<never>(() => undefined);
+            await beforeListing?.();
+            const result = await fake.cli(args);
+            return { ...result, stdout: formatOutput(result.stdout) };
           },
           includeUnmanaged: true,
           timeoutMs: LIST_TIMEOUT_MS,
@@ -284,6 +292,21 @@ function managedClaude() {
     hang() {
       hangs = true;
     },
+    pauseListing(until: Promise<void>) {
+      const started = Promise.withResolvers<void>();
+      beforeListing = () => {
+        beforeListing = undefined;
+        started.resolve();
+        return until;
+      };
+      return started.promise;
+    },
+    async setEnabled(id: string, enabled: boolean) {
+      const installed = fake.installed.get(id)!;
+      const before = await fs.stat(installed.installPath);
+      expect((await fake.cli(["plugin", enabled ? "enable" : "disable", id])).exitCode).toBe(0);
+      expect((await fs.stat(installed.installPath)).mtimeMs).toBe(before.mtimeMs);
+    },
     /** Moves the listing cache's clock on. */
     advance(ms: number) {
       clock += ms;
@@ -292,10 +315,33 @@ function managedClaude() {
   };
 }
 
-test("managed Claude uses one bounded listing and launches read it only for a selected plugin", async () => {
+test("malformed Claude output leaves healthy plugins and the Codex timeout visible", async () => {
   const network = new TestNodeNetwork();
-  const localClaude = managedClaude();
-  const leafClaude = managedClaude();
+  const claude = managedClaude(() => "invalid JSON");
+  const desktop = await addCapabilityNode(network, "desktop", {
+    forceRegistration: true,
+    claudePlugins: claude.deps,
+    inventoryPlugins: hungCodexListings(["codex", "grok"]).plugins,
+  });
+  const inventory = await desktop.cap.getInventory({ refresh: true });
+  expect(inventory.items).toContainEqual(
+    expect.objectContaining({ provider: "grok", name: "grok-plugin" }),
+  );
+  expect(inventory.errors).toContainEqual({
+    source: "plugin-discovery",
+    message: "Claude's plugin list could not be read.",
+  });
+  expect(inventory.errors).toContainEqual({
+    source: "plugin-discovery",
+    message: inventoryPluginTimeoutMessage("codex", LIST_TIMEOUT_MS),
+  });
+});
+
+async function fleetWithManagedClaude() {
+  const network = new TestNodeNetwork();
+  const banner = (stdout: string) => `Loading plugins...\n${stdout}\n`;
+  const localClaude = managedClaude(banner);
+  const leafClaude = managedClaude(banner);
   const desktop = await addCapabilityNode(network, "desktop", {
     forceRegistration: true,
     claudePlugins: localClaude.deps,
@@ -331,7 +377,13 @@ test("managed Claude uses one bounded listing and launches read it only for a se
     approvedDigest: preview.operation.planDigest,
   });
   await desktop.cap.reconciler.idle();
+  return { desktop, leaf, localClaude, leafClaude, inspected, plugin };
+}
 
+test("managed Claude accepts a banner and shares discovery while each launch checks enablement", async () => {
+  const { desktop, leaf, localClaude, leafClaude, inspected, plugin } =
+    await fleetWithManagedClaude();
+  const qualifiedId = `review-plugin@${ORKESTRATOR_CLAUDE_MARKETPLACE}`;
   for (const [node, cli] of [
     [desktop, localClaude],
     [leaf, leafClaude],
@@ -350,8 +402,7 @@ test("managed Claude uses one bounded listing and launches read it only for a se
       expect.objectContaining({ ownership: "managed", componentId: plugin.id }),
     ]);
     expect(cli.listings() - before).toBe(1);
-    // A launch accepts only a younger listing, and lists once even on a leaf,
-    // whose command node's observation and own recheck share it.
+    // A launch lists once even on a leaf, whose two checks share its fresh list.
     const beforeLaunch = cli.listings();
     expect((await node.cap.preflightSession(launch("verified")))?.resolvedPackages).toContainEqual(
       expect.objectContaining({ id: inspected.packageId }),
@@ -359,7 +410,24 @@ test("managed Claude uses one bounded listing and launches read it only for a se
     expect(cli.listings() - beforeLaunch).toBe(1);
     await node.cap.getInventory({});
     expect(cli.listings() - beforeLaunch).toBe(1);
-    cli.advance(LAUNCH_PLUGIN_LISTING_MAX_AGE_MS);
+    await cli.setEnabled(qualifiedId, false);
+    // Keep the discovery cache warm and the installation files untouched.
+    const afterDisable = await node.cap.getInventory({});
+    expect(afterDisable.items).toContainEqual(
+      expect.objectContaining({ qualifiedId, enabled: true, componentId: plugin.id }),
+    );
+    expect(cli.listings() - beforeLaunch).toBe(1);
+    await expect(node.cap.preflightSession(launch("required-disabled"))).rejects.toThrow(
+      "not verified",
+    );
+    expect(cli.listings() - beforeLaunch).toBe(2);
+    await cli.setEnabled(qualifiedId, true);
+  }
+});
+
+test("a hung Claude listing delays only launches that select the managed plugin", async () => {
+  const { desktop, leaf, localClaude, leafClaude } = await fleetWithManagedClaude();
+  for (const cli of [localClaude, leafClaude]) {
     cli.hang();
   }
 
@@ -401,5 +469,94 @@ test("managed Claude uses one bounded listing and launches read it only for a se
         message: inventoryPluginTimeoutMessage("claude", LIST_TIMEOUT_MS),
       }),
     );
+  }
+});
+
+test("a legacy command node gets a retry only for selected managed Claude plugins", async () => {
+  const { desktop, leaf, leafClaude, inspected, plugin } = await fleetWithManagedClaude();
+  const answer = desktop.cap.answerLeafLaunch.bind(desktop.cap);
+  const requests: Array<{ scopedManagedPlugins?: boolean; inventory?: { items?: unknown[] } }> = [];
+  const legacy = spyOn(desktop.cap, "answerLeafLaunch").mockImplementation((nodeId, payload) => {
+    const { requestId, request } = payload as {
+      requestId: string;
+      request: (typeof requests)[number];
+    };
+    requests.push(request);
+    const { scopedManagedPlugins: _ignored, ...legacyRequest } = request;
+    return answer(nodeId, { requestId, request: legacyRequest });
+  });
+  try {
+    const before = leafClaude.listings();
+    expect(
+      (await leaf.cap.preflightSession(launch("legacy-required")))?.resolvedPackages,
+    ).toContainEqual(expect.objectContaining({ id: inspected.packageId }));
+    expect(requests.map((request) => request.scopedManagedPlugins)).toEqual([true, undefined]);
+    expect(requests[1]?.inventory?.items).toContainEqual(
+      expect.objectContaining({ locationId: "plugin:claude", componentId: plugin.id }),
+    );
+    expect(leafClaude.listings() - before).toBe(1);
+
+    desktop.storage.capabilities.mutateCapabilityState((state) => {
+      state.setups[MY_SETUP_ID]!.packageSelections = [];
+      return { result: undefined, changed: true };
+    });
+    leafClaude.hang();
+    requests.length = 0;
+    const beforeEmpty = leafClaude.listings();
+    const empty = await leaf.cap.preflightSession(launch("legacy-empty"));
+    expect(empty?.resolvedPackages).toEqual([]);
+    expect(empty?.launchBlockers).toEqual([]);
+    expect(requests).toHaveLength(1);
+    expect(leafClaude.listings()).toBe(beforeEmpty);
+  } finally {
+    legacy.mockRestore();
+  }
+});
+
+test("a fenced Claude listing can finish after the leaf's ordinary answer deadline", async () => {
+  const { leaf, leafClaude, inspected } = await fleetWithManagedClaude();
+  const release = Promise.withResolvers<void>();
+  leaf.cap.leafLaunch.answerTimeoutMs = 20;
+  const before = leafClaude.listings();
+  jest.useFakeTimers();
+  try {
+    const started = leafClaude.pauseListing(release.promise);
+    const preflight = leaf.cap.preflightSession(launch("slow-fenced-listing"));
+    await Promise.race([started, preflight]);
+    jest.advanceTimersByTime(50);
+    release.resolve();
+    await expect(preflight).resolves.toMatchObject({
+      resolvedPackages: [expect.objectContaining({ id: inspected.packageId })],
+      launchBlockers: [],
+    });
+    expect(leafClaude.listings() - before).toBe(1);
+  } finally {
+    release.resolve();
+    jest.useRealTimers();
+  }
+});
+
+test("a leaf rereads Claude's list if plugin configuration changed after fenced observation", async () => {
+  const { leaf, leafClaude } = await fleetWithManagedClaude();
+  const answer = leaf.cap.executorLaunchAnswer.bind(leaf.cap);
+  const editBeforeAnswer = spyOn(leaf.cap, "executorLaunchAnswer").mockImplementationOnce(
+    async (args) => {
+      const id = `review-plugin@${ORKESTRATOR_CLAUDE_MARKETPLACE}`;
+      await leafClaude.setEnabled(id, false);
+      await fs.writeFile(
+        path.join(leaf.home, ".claude", "settings.json"),
+        JSON.stringify({ enabledPlugins: { [id]: false } }),
+      );
+      return answer(args);
+    },
+  );
+  const before = leafClaude.listings();
+  try {
+    await expect(leaf.cap.preflightSession(launch("changed-after-observation"))).rejects.toThrow(
+      "changed on this machine",
+    );
+    expect(leafClaude.listings() - before).toBe(2);
+  } finally {
+    editBeforeAnswer.mockRestore();
   }
 });

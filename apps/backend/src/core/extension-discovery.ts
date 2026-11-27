@@ -125,7 +125,26 @@ export function parseClaudeMcpList(output: string): ExtensionItem[] {
 }
 
 export function parseClaudePlugins(output: string): ExtensionItem[] {
-  const parsed = parseJsonOutput(output);
+  const parsed = parseClaudeJsonOutput(output);
+  if (parsed === undefined) throw new Error("The CLI returned invalid JSON");
+  return claudePluginItems(parsed);
+}
+
+/** Claude may print a human-readable preamble before a final JSON line. */
+export function parseClaudeJsonOutput(stdout: string): unknown {
+  const text = stdout.trim();
+  try {
+    return JSON.parse(text);
+  } catch {
+    try {
+      return JSON.parse(text.slice(text.lastIndexOf("\n") + 1));
+    } catch {
+      return undefined;
+    }
+  }
+}
+
+export function claudePluginItems(parsed: unknown): ExtensionItem[] {
   if (!Array.isArray(parsed)) return [];
 
   return sortAndDedupeKeyed(

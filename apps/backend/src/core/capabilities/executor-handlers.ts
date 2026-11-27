@@ -38,13 +38,15 @@ export class CapabilityExecutorHandlers {
       MAX_CAPABILITY_INVENTORY_ITEMS,
       (id) => id.length <= 256,
     );
-    if (launch && managedPluginComponents.length > 0 && typeof args.launchRequestId === "string") {
-      this.ctx.leafLaunch.expectManagedPluginEvidence(args.launchRequestId);
-    }
+    const pluginListingScope =
+      launch && managedPluginComponents.length > 0 && typeof args.launchRequestId === "string"
+        ? this.ctx.leafLaunch.expectManagedPluginEvidence(args.launchRequestId)
+        : undefined;
     return this.ctx.observeSelf({
       launch,
       refresh: args.refresh === true,
       managedPluginComponents,
+      pluginListingScope,
     });
   }
 

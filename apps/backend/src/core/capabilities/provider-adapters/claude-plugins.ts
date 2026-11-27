@@ -42,6 +42,7 @@ import {
   type CapabilityVerificationLevel,
 } from "@orkestrator/protocol/capability-resources";
 
+import { parseClaudeJsonOutput } from "../../extension-discovery.js";
 import type { CapabilityHomes } from "../native-ownership.js";
 import {
   assertCapabilityDirectory,
@@ -217,25 +218,12 @@ export function claudePluginName(files: readonly PackageFile[]): string {
   return name;
 }
 
-function parseJsonOutput(stdout: string): unknown {
-  const text = stdout.trim();
-  if (!text) return undefined;
-  try {
-    return JSON.parse(text);
-  } catch {
-    // `--json` result lines follow any human output on the last line.
-    const last = text.split(/\r?\n/).pop() ?? "";
-    try {
-      return JSON.parse(last);
-    } catch {
-      return undefined;
-    }
-  }
-}
-
 /** `claude plugin list --json`, validated; `null` when the answer cannot be read. */
 export function parseClaudePluginList(stdout: string): ClaudeInstalledPlugin[] | null {
-  const value = parseJsonOutput(stdout);
+  return claudeInstalledPlugins(parseClaudeJsonOutput(stdout));
+}
+
+export function claudeInstalledPlugins(value: unknown): ClaudeInstalledPlugin[] | null {
   if (!Array.isArray(value)) return null;
   const plugins: ClaudeInstalledPlugin[] = [];
   for (const raw of value.slice(0, MAX_LISTED_PLUGINS)) {
@@ -264,7 +252,7 @@ export function parseClaudePluginList(stdout: string): ClaudeInstalledPlugin[] |
 
 /** `claude plugin marketplace list --json`, validated; `null` when unreadable. */
 export function parseClaudeMarketplaceList(stdout: string): ClaudeMarketplace[] | null {
-  const value = parseJsonOutput(stdout);
+  const value = parseClaudeJsonOutput(stdout);
   if (!Array.isArray(value)) return null;
   return value.flatMap((raw): ClaudeMarketplace[] => {
     if (raw === null || typeof raw !== "object") return [];
@@ -355,6 +343,28 @@ export class ClaudePluginAdapter {
   }
 
   // --- Observation ---------------------------------------------------------------
+
+  /** Identity of the host files relevant to reusing one launch's plugin list. */
+  async pluginListingRevision(): Promise<string | undefined> {
+    const dir = this.deps.homes().claudeConfigDir;
+    const files = [
+      "settings.json",
+      "plugins/installed_plugins.json",
+      "plugins/known_marketplaces.json",
+    ];
+    const revisions = await Promise.all(
+      files.map(async (file) => {
+        try {
+          const info = await fs.stat(path.join(dir, file), { bigint: true });
+          return `${info.dev}:${info.ino}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`;
+        } catch (error) {
+          return (error as NodeJS.ErrnoException).code === "ENOENT" ? "absent" : undefined;
+        }
+      }),
+    );
+    if (revisions.every((revision) => revision !== undefined))
+      return `${dir}|${revisions.join("|")}`;
+  }
 
   async listPlugins(): Promise<ClaudeInstalledPlugin[]> {
     const result = await this.deps.cli(["plugin", "list", "--json"]);
@@ -811,7 +821,7 @@ export class ClaudePluginAdapter {
 
 function resultMessage(result: ClaudeCliResult): string {
   if (result.timedOut) return "the command timed out.";
-  const value = parseJsonOutput(result.stdout) as { message?: unknown } | undefined;
+  const value = parseClaudeJsonOutput(result.stdout) as { message?: unknown } | undefined;
   const message =
     value && typeof value === "object" && typeof value.message === "string"
       ? value.message

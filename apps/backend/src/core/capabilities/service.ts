@@ -246,8 +246,8 @@ export class CapabilityService {
     });
     this.leafLaunch = new LeafLaunchAuthority({
       storage: deps.storage,
-      observeSelf: (managedPluginComponents) =>
-        this.observeSelf({ launch: true, managedPluginComponents }),
+      observeSelf: (managedPluginComponents, pluginListingScope) =>
+        this.observeSelf({ launch: true, managedPluginComponents, pluginListingScope }),
       managedPluginComponents: async () => {
         const index = await deps.claudePlugins?.readIndex();
         return Object.values(index?.plugins ?? {}).map((plugin) => plugin.componentId);
@@ -396,10 +396,8 @@ export class CapabilityService {
 
   /**
    * This machine's inventory. Files, MCP configuration and managed plugin
-   * bytes are read live; the provider CLIs' plugin listings come from the
-   * shared cache (a launch accepts only a recent Claude listing), and a
-   * launch read leaves the unmanaged ones out: they are never launch evidence
-   * (`isLaunchInventoryEvidence`) and one CLI can hang.
+   * bytes are read live. Discovery uses the shared provider cache. Launch
+   * reads request a fresh listing only for selected managed Claude plugins.
    */
   async observeSelf(options: InventoryReadOptions = {}): Promise<CapabilityInventory> {
     const selfId = await this.deps.selfId();
@@ -421,7 +419,10 @@ export class CapabilityService {
         ? async () => {
             const [otherListing, claudeListing] = await Promise.all([
               pluginListing,
-              listClaude?.(),
+              listClaude?.().catch(() => ({
+                plugins: [],
+                errors: [{ message: "Claude's plugin list could not be read." }],
+              })),
             ]);
             return {
               plugins: [...(otherListing?.plugins ?? []), ...(claudeListing?.plugins ?? [])],

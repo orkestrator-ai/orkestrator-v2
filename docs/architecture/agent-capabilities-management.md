@@ -221,12 +221,14 @@ some hosts.
 - **Plugin listings share a 60-second cache.** Concurrent readers join one
   listing in flight, and later readers within the window reuse it, Claude's
   managed plugin evidence included, so each provider CLI runs at most once
-  per window. Each executor write, a
-  saved or detected edit to backend-user MCP configuration, and a committed
+  per discovery window. Each executor write, a saved or detected edit to
+  backend-user MCP configuration, and a committed
   Codex plugin switch invalidate the cache. Applying a saved MCP change or
   reporting its progress uses the existing listing. An explicit
   `get_capability_inventory` refresh bypasses the settled cache on the
-  machine being inspected, including a leaf.
+  machine being inspected, including a leaf. For Claude's user MCP
+  configuration, automatic change detection compares the server map so
+  Claude's bookkeeping writes leave the listing cached.
 - **Each provider listing has a 5-second deadline.** On timeout, the inventory
   names the agent and still returns results from the others. The backend logs
   `capabilities inventory.plugin-list-timed-out` with the provider and deadline,
@@ -236,11 +238,11 @@ some hosts.
   count against that evidence.
 - **Launch evidence and the Test action read files and MCP configuration
   live.** They skip unmanaged listings on both local and remote hosts. A host
-  Claude launch asks for a bounded listing only when the resolved selection
-  uses a managed plugin, and accepts a cached one only when it is under
-  `LAUNCH_PLUGIN_LISTING_MAX_AGE_MS` (15 seconds) old, so a leaf's two reads
-  of one launch share one listing. Managed Claude checks verify the package
-  directories live, and full inventory shares the same CLI result with
+  Claude launch asks for a fresh, bounded listing only when the resolved
+  selection uses a managed plugin. A leaf shares the listing between the
+  command node's observation and its own recheck for that launch while the
+  plugin configuration is unchanged. Managed Claude checks verify the
+  package directories live, and full inventory shares one CLI result with
   unmanaged Claude discovery.
 - **An empty library skips launch observation.** The command node checks the
   same state snapshot it resolves, after scoped delivery has run. A leaf

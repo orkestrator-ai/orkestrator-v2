@@ -280,6 +280,46 @@ describe("project setups in a local worktree", () => {
     }
   });
 
+  test("a required project skill blocks launch when the personal skill inventory cannot be read", async () => {
+    const fixture = await makeFixture();
+    const { worktree } = await repository(fixture);
+    fixture.environments = [
+      { id: "env-a", projectId: "proj-1", environmentType: "local", worktreePath: worktree },
+    ];
+    const toolkit = await fixture.service.setSetup({ setup: { name: "Project review" } });
+    await addToSetup(
+      fixture,
+      { kind: "skill", name: "review", content: "Review code." },
+      toolkit.id,
+      true,
+    );
+    await fixture.service.assignSetup({
+      scope: "project",
+      scopeId: "proj-1",
+      setupIds: [toolkit.id],
+    });
+    await fixture.service.reconciler.idle();
+    const request = {
+      environmentId: "env-a",
+      projectId: "proj-1",
+      provider: "claude" as const,
+      sessionKey: "unreadable-personal-skills",
+    };
+    await expect(fixture.service.preflightSession(request)).resolves.toMatchObject({
+      launchBlockers: [],
+    });
+    const observe = spyOn(fixture.service, "observeSelf").mockRejectedValue(
+      new Error("Inventory unavailable"),
+    );
+    try {
+      await expect(fixture.service.preflightSession(request)).rejects.toThrow(
+        "The personal skill location could not be checked",
+      );
+    } finally {
+      observe.mockRestore();
+    }
+  });
+
   test("an isolated graph launch stages required project and graph-only skills in its own branch", async () => {
     const fixture = await makeFixture();
     const { main, worktree } = await repository(fixture);

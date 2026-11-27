@@ -47,6 +47,8 @@ export interface InventoryReadOptions {
   managedPluginComponents?: readonly string[];
   /** Pending leaf launch whose proof is being read by its command node. */
   launchRequestId?: string;
+  /** Local token shared by the fenced observation and recheck of one leaf launch. */
+  pluginListingScope?: object;
   /** List the plugins again rather than use a recent listing. */
   refresh?: boolean;
 }

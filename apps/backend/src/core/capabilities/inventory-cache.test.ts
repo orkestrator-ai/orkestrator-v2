@@ -52,25 +52,6 @@ describe("InventoryPluginCache", () => {
     expect(loads).toBe(2);
   });
 
-  test("a reader's shorter maximum age narrows the window but never widens it", async () => {
-    let clock = 1_000;
-    let loads = 0;
-    const cache = new InventoryPluginCache(async () => listing(`load-${++loads}`), {
-      ttlMs: 60_000,
-      now: () => clock,
-    });
-    await cache.read();
-    clock += 10_000;
-    expect((await cache.read({ maxAgeMs: 15_000 })).plugins[0]!.name).toBe("load-1");
-    clock += 5_000;
-    expect((await cache.read({ maxAgeMs: 15_000 })).plugins[0]!.name).toBe("load-2");
-    clock += 59_000;
-    expect((await cache.read({ maxAgeMs: 120_000 })).plugins[0]!.name).toBe("load-2");
-    clock += 1_000;
-    expect((await cache.read({ maxAgeMs: 120_000 })).plugins[0]!.name).toBe("load-3");
-    expect(loads).toBe(3);
-  });
-
   test("refresh skips a settled listing", async () => {
     let loads = 0;
     const cache = new InventoryPluginCache(async () => listing(`load-${++loads}`));

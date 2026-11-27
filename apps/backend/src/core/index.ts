@@ -1600,6 +1600,7 @@ export class OrkestratorBackend {
       dataDir: options.dataDir,
       storage,
       emit,
+      onHostConfigChange: () => context.capabilities?.invalidateInventory(),
       probe: createMcpRuntimeProbe(context),
       ...mcpContainerOptions(context),
       loadRollout: mcpRolloutLoader(context),

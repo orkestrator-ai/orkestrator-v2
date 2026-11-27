@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "digest": "sha256:577dd6d3d40ff6ba9f0575a31a7876b3cd392562e5c3413509f5ff9e0ed2b88b",
+  "document": {
+    "definitions": {},
+    "dialect": "draft-2020-12",
+    "schema": {
+      "additionalProperties": true,
+      "properties": {
+        "controllerId": {},
+        "epoch": {},
+        "launch": {},
+        "launchRequestId": {},
+        "managedPluginComponents": {},
+        "refresh": {}
+      },
+      "type": "object"
+    }
+  }
+}

@@ -36,6 +36,23 @@ import type { GitFetchOptions } from "./source-inspection.js";
 import type { CapabilityState } from "./types.js";
 import type { MachineFact } from "./views.js";
 
+/** How a read of this machine's inventory treats the provider CLIs' plugin listings. */
+export interface InventoryReadOptions {
+  /**
+   * Launch evidence only: skips unmanaged listings and checks only the
+   * managed Claude components explicitly requested.
+   */
+  launch?: boolean;
+  /** Managed Claude component IDs needed for a launch-evidence read. */
+  managedPluginComponents?: readonly string[];
+  /** Pending leaf launch whose proof is being read by its command node. */
+  launchRequestId?: string;
+  /** Local token shared by the fenced observation and recheck of one leaf launch. */
+  pluginListingScope?: object;
+  /** List the plugins again rather than use a recent listing. */
+  refresh?: boolean;
+}
+
 export interface CapabilityServiceDeps {
   storage: {
     capabilities: CapabilitiesStorage;
@@ -61,6 +78,9 @@ export interface CapabilityServiceDeps {
   }): void;
   homes(): CapabilityHomes;
   inventory: Omit<InventorySources, "homes">;
+  claudeInventory?: ReturnType<
+    typeof import("./inventory-plugins.js").createClaudeInventoryPluginSource
+  >;
   mcp?: McpInstaller;
   claudePlugins?: ExecutorClaudePlugins;
   gitRun?: GitFetchOptions["run"];
@@ -123,8 +143,8 @@ export interface CapabilityServiceContext {
   assertAuthority(): void;
   /** This machine first, then the machines it controls. */
   machineFacts(): Promise<MachineFact[]>;
-  observeSelf(): Promise<CapabilityInventory>;
+  observeSelf(options?: InventoryReadOptions): Promise<CapabilityInventory>;
   /** A machine's live inventory: this one directly, another over its node link. */
-  observeNode(nodeId: string): Promise<CapabilityInventory>;
+  observeNode(nodeId: string, options?: InventoryReadOptions): Promise<CapabilityInventory>;
   resolveFor(state: CapabilityState, input: CapabilityResolveInput): EffectiveAgentResources;
 }

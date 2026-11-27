@@ -17,6 +17,8 @@ import { testCapabilityHomes } from "./native-ownership.js";
 import { CapabilityService } from "./service.js";
 import { parseNodePlanTargets } from "./executor.js";
 import { finalizeOperation } from "./operations.js";
+import { inventoryPluginLister } from "./inventory-plugins.js";
+import type { InventoryPluginListing } from "./inventory.js";
 import { CapabilityArtifactStore } from "./artifact-store.js";
 import { treeDigest, validatePackageFiles } from "./security.js";
 import { CAPABILITY_LIMITS } from "@orkestrator/protocol/capability-resources";
@@ -28,6 +30,7 @@ interface Node {
   storage: StorageService;
   service: CapabilityService;
   connected: boolean;
+  inventoryPlugins?: () => Promise<InventoryPluginListing>;
   busyProviders?: import("@orkestrator/protocol/agent-platforms").AgentPlatform[];
   /** Throw after a successful apply, as a dropped link would. */
   loseNextApplyAnswer: boolean;
@@ -121,6 +124,7 @@ async function makeNode(id: string, others: () => Node[], isCommand: boolean): P
     busyProviders: async () => node.busyProviders ?? [],
     inventory: {
       providers: async () => AGENT_PLATFORMS.map((provider) => ({ provider, available: true })),
+      plugins: async () => node.inventoryPlugins?.() ?? { plugins: [] },
     },
   });
   await node.service.init();
@@ -639,6 +643,53 @@ describe("remote safety", () => {
       (cell) => cell.target.nodeId === leafA.id && cell.target.provider === "claude",
     );
     expect(settled[0]?.status).toBe("installed-next-session");
+  });
+
+  test("an unmanaged plugin timeout does not prevent a lost removal from settling", async () => {
+    const { command, leafA } = await fleet();
+    const { inspection } = await addSkill(command, "removable", "Temporary skill.");
+    const removal = await command.service.previewChange({
+      change: { kind: "remove-from-setup", packageId: inspection.packageId, setupId: MY_SETUP_ID },
+    });
+    leafA.loseNextApplyAnswer = true;
+    await command.service.applyChange({
+      operationId: removal.operation.id,
+      approvedDigest: removal.operation.planDigest,
+    });
+    await command.service.reconciler.idle();
+    const receipt = Object.values(
+      (await command.storage.capabilities.loadCapabilityState()).receipts,
+    ).find((entry) => entry.nodeId === leafA.id && entry.locationId === "claude-user-skills");
+    expect(receipt?.pendingWrite?.action).toBe("remove");
+    expect(receipt?.outcomeUnknown).toBe(true);
+    expect(await Bun.file(skillFile(leafA, ".claude", "removable")).exists()).toBe(false);
+
+    leafA.inventoryPlugins = inventoryPluginLister({
+      providers: ["codex"],
+      timeoutMs: 20,
+      run: () => new Promise<never>(() => undefined),
+    });
+    leafA.service.invalidateInventory();
+    const calls = leafA.applyCalls.length;
+    await command.service.reconciler.reconcileNode(leafA.id, "recheck");
+    const state = await command.storage.capabilities.loadCapabilityState();
+    expect(state.machines[leafA.id]?.inventory?.errors).toContainEqual(
+      expect.objectContaining({
+        source: "plugin-discovery",
+        message: expect.stringContaining("Codex"),
+      }),
+    );
+    expect(leafA.applyCalls).toHaveLength(calls);
+    expect(state.receipts[receipt!.id]).toBeUndefined();
+    const operation = await command.service.getOperation({ operationId: removal.operation.id });
+    expect(operation.targets).toContainEqual(
+      expect.objectContaining({
+        action: "remove",
+        status: "ready",
+        locationId: "claude-user-skills",
+        target: expect.objectContaining({ nodeId: leafA.id }),
+      }),
+    );
   });
 
   test("a lost update reply settles the attempted digest without writing again", async () => {

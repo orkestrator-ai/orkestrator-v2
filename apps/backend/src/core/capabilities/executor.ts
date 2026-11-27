@@ -168,6 +168,8 @@ export interface CapabilityExecutorDeps {
   now?: () => string;
   /** A graph's disposable worktree is owned by the activation lifecycle. */
   recordApplied?: boolean;
+  /** After each attempted write, whatever its outcome: the inventory no longer holds. */
+  afterWrite?: () => void;
 }
 
 /**
@@ -355,6 +357,7 @@ export class CapabilityExecutor {
                 };
           } finally {
             finish();
+            this.deps.afterWrite?.();
           }
         }),
       );

@@ -77,6 +77,8 @@ Backend code is in `apps/backend/src/core/capabilities/`:
 | `executor.ts` | This machine's writer: idempotent per key, epoch-checked, ownership-preserving. |
 | `native-ownership.ts` | Location ids → this machine's directories; ownership markers and the location index. |
 | `inventory.ts` | Managed and external items, plugins (fully qualified ids) and MCP servers. |
+| `inventory-cache.ts` | Provider plugin listings, shared by concurrent readers, with a 60 s cache for discovery and explicit invalidation on configuration writes. |
+| `inventory-plugins.ts` | One plugin listing per provider CLI, 5 s each; a timeout is an error naming the agent. |
 | `runtime-evidence.ts` | Receipt status. A catalogue name does not establish the identity of the loaded artifact. |
 | `update-checker.ts` | Remote head checks, re-inspection, update proposals. |
 | `import-export.ts` | `orkestrator.capabilities.yaml` and `orkestrator.capabilities.lock.json`. |
@@ -208,6 +210,46 @@ that holds even when its project copy matches, because the provider reads
 both and Claude ranks a personal skill above a project one. The launch record
 lists exactly the observed digests (`deliveries`, with `container:<location>`,
 `account:<location>` and project location ids for those copies).
+
+### Inventory reads
+
+A machine's inventory reads files, MCP configuration and which providers are
+installed. A full read also asks provider CLIs to list native plugins. Codex
+0.167 and 0.169 can hold a connection to a remote service and never exit on
+some hosts.
+
+- **Plugin listings share a 60-second cache.** Concurrent readers join one
+  listing in flight, and later readers within the window reuse it, Claude's
+  managed plugin evidence included, so each provider CLI runs at most once
+  per discovery window. Each executor write, a saved or detected edit to
+  backend-user MCP configuration, and a committed
+  Codex plugin switch invalidate the cache. Applying a saved MCP change or
+  reporting its progress uses the existing listing. An explicit
+  `get_capability_inventory` refresh bypasses the settled cache on the
+  machine being inspected, including a leaf. For Claude's user MCP
+  configuration, automatic change detection compares the server map so
+  Claude's bookkeeping writes leave the listing cached.
+- **Each provider listing has a 5-second deadline.** On timeout, the inventory
+  names the agent and still returns results from the others. The backend logs
+  `capabilities inventory.plugin-list-timed-out` with the provider and deadline,
+  once until it answers again. Unmanaged errors carry
+  `source: "plugin-discovery"`, so the reconciler can confirm a managed
+  removal when its delivery evidence is complete. Managed read errors still
+  count against that evidence.
+- **Launch evidence and the Test action read files and MCP configuration
+  live.** They skip unmanaged listings on both local and remote hosts. A host
+  Claude launch asks for a fresh, bounded listing only when the resolved
+  selection uses a managed plugin. A leaf shares the listing between the
+  command node's observation and its own recheck for that launch while the
+  plugin configuration is unchanged. Managed Claude checks verify the
+  package directories live, and full inventory shares one CLI result with
+  unmanaged Claude discovery.
+- **An empty library skips launch observation.** The command node checks the
+  same state snapshot it resolves, after scoped delivery has run. A leaf
+  reports its file evidence first. Where a selected managed Claude plugin
+  needs observation, the command node requests that evidence from the leaf.
+  The leaf rechecks the required copies after the answer and otherwise reuses
+  its first read.
 
 ## Resolution
 

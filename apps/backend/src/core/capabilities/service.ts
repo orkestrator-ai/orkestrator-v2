@@ -72,7 +72,8 @@ import {
 } from "./handover.js";
 import { CapabilityImportCommands } from "./import-commands.js";
 import { CapabilityInspectionCommands } from "./inspection-commands.js";
-import { collectCapabilityInventory } from "./inventory.js";
+import { collectCapabilityInventory, type InventorySources } from "./inventory.js";
+import { InventoryPluginCache } from "./inventory-cache.js";
 import { answerLeafLaunch, LeafLaunchAuthority } from "./launch-authority.js";
 import { CapabilityLibraryReads } from "./library-reads.js";
 import { remoteTransport, routedTransport } from "./node-transport.js";
@@ -88,13 +89,14 @@ import type {
   CapabilityChangeNotice,
   CapabilityServiceContext,
   CapabilityServiceDeps,
+  InventoryReadOptions,
 } from "./service-context.js";
 import { CapabilitySetupCommands } from "./setup-commands.js";
 import type { CapabilityState } from "./types.js";
 import { CapabilityUpdateCommands } from "./update-commands.js";
 import type { MachineFact } from "./views.js";
 
-export type { CapabilityServiceDeps } from "./service-context.js";
+export type { CapabilityServiceDeps, InventoryReadOptions } from "./service-context.js";
 
 const log = createLogger("capabilities");
 
@@ -125,6 +127,8 @@ export class CapabilityService {
   private readonly updates: CapabilityUpdateCommands;
   private readonly preflight: CapabilityPreflight;
   private readonly executorHandlers: CapabilityExecutorHandlers;
+  /** The provider CLIs' plugin listings, shared and briefly kept (`inventory-cache.ts`). */
+  private readonly pluginListing: InventoryPluginCache | undefined;
   private updateTimer: ReturnType<typeof setInterval> | null = null;
   private disposed = false;
   /** This node handed (or is handing) its authority to another command node. */
@@ -135,6 +139,8 @@ export class CapabilityService {
     const nodeAuthority = deps.isAuthority;
     this.deps = { ...deps, isAuthority: () => nodeAuthority() && !this.handedOver };
     this.artifacts = new CapabilityArtifactStore(deps.dataDir);
+    const listPlugins = deps.inventory.plugins;
+    this.pluginListing = listPlugins ? new InventoryPluginCache(() => listPlugins()) : undefined;
     this.drift = new CapabilityDriftWorkflow({
       storage: deps.storage,
       artifacts: this.artifacts,
@@ -175,6 +181,8 @@ export class CapabilityService {
       ...(deps.mcp ? { mcp: deps.mcp } : {}),
       ...(deps.claudePlugins ? { claudePlugins: deps.claudePlugins } : {}),
       ...(deps.now ? { now: deps.now } : {}),
+      // A write to this machine's homes changes what its inventory reports.
+      afterWrite: () => this.invalidateInventory(),
     });
     const local = localTransport({
       selfId: deps.selfId,
@@ -238,7 +246,12 @@ export class CapabilityService {
     });
     this.leafLaunch = new LeafLaunchAuthority({
       storage: deps.storage,
-      observeSelf: () => this.observeSelf(),
+      observeSelf: (managedPluginComponents, pluginListingScope) =>
+        this.observeSelf({ launch: true, managedPluginComponents, pluginListingScope }),
+      managedPluginComponents: async () => {
+        const index = await deps.claudePlugins?.readIndex();
+        return Object.values(index?.plugins ?? {}).map((plugin) => plugin.componentId);
+      },
       admitEpoch: (controllerId, epoch) => this.executor.admitEpoch(controllerId, epoch),
       controllerReachable: async () => (await this.deps.controllerReachable?.()) ?? false,
       ...(deps.requestLaunch ? { request: deps.requestLaunch } : {}),
@@ -274,8 +287,8 @@ export class CapabilityService {
       announce: (change) => this.announce(change),
       assertAuthority: () => this.assertAuthority(),
       machineFacts: () => this.machineFacts(),
-      observeSelf: () => this.observeSelf(),
-      observeNode: (nodeId) => this.observeNode(nodeId),
+      observeSelf: (options) => this.observeSelf(options),
+      observeNode: (nodeId, options) => this.observeNode(nodeId, options),
       resolveFor: (state, input) => this.resolveFor(state, input),
     };
     this.reads = new CapabilityLibraryReads(context);
@@ -371,13 +384,53 @@ export class CapabilityService {
     ];
   }
 
-  async observeSelf(): Promise<CapabilityInventory> {
+  /**
+   * Something on this machine changed what its inventory reports (a
+   * capability write, an MCP change, a plugin switch): the next read lists
+   * the provider plugins again rather than serve a listing from before it.
+   */
+  invalidateInventory(): void {
+    this.pluginListing?.invalidate();
+    this.deps.claudeInventory?.invalidate();
+  }
+
+  /**
+   * This machine's inventory. Files, MCP configuration and managed plugin
+   * bytes are read live. Discovery uses the shared provider cache. Launch
+   * reads request a fresh listing only for selected managed Claude plugins.
+   */
+  async observeSelf(options: InventoryReadOptions = {}): Promise<CapabilityInventory> {
     const selfId = await this.deps.selfId();
-    const inventory = await collectCapabilityInventory(
-      selfId,
-      { ...this.deps.inventory, homes: this.deps.homes() },
-      () => this.now(),
-    );
+    const sources: InventorySources = { ...this.deps.inventory, homes: this.deps.homes() };
+    const claude = this.deps.claudeInventory?.read(options);
+    sources.managedPlugins =
+      claude?.managedPlugins ??
+      (!options.launch || options.managedPluginComponents?.length
+        ? sources.managedPlugins
+        : undefined);
+    const pluginListing = options.launch
+      ? undefined
+      : this.pluginListing
+          ?.read({ refresh: options.refresh })
+          .catch(() => ({ plugins: [], errors: [{ message: "Could not list native plugins." }] }));
+    const listClaude = claude?.plugins;
+    sources.plugins =
+      pluginListing || listClaude
+        ? async () => {
+            const [otherListing, claudeListing] = await Promise.all([
+              pluginListing,
+              listClaude?.().catch(() => ({
+                plugins: [],
+                errors: [{ message: "Claude's plugin list could not be read." }],
+              })),
+            ]);
+            return {
+              plugins: [...(otherListing?.plugins ?? []), ...(claudeListing?.plugins ?? [])],
+              errors: [...(otherListing?.errors ?? []), ...(claudeListing?.errors ?? [])],
+            };
+          }
+        : undefined;
+    const inventory = await collectCapabilityInventory(selfId, sources, () => this.now());
     if (this.deps.busyProviders) {
       // An unreadable activity record holds every provider: err towards not changing running work.
       inventory.busyProviders = await this.deps.busyProviders().catch(() => [...AGENT_PLATFORMS]);
@@ -441,14 +494,17 @@ export class CapabilityService {
     return inventory;
   }
 
-  private async observeNode(nodeId: string): Promise<CapabilityInventory> {
-    if (nodeId === (await this.deps.selfId())) return this.observeSelf();
+  private async observeNode(
+    nodeId: string,
+    options: InventoryReadOptions = {},
+  ): Promise<CapabilityInventory> {
+    if (nodeId === (await this.deps.selfId())) return this.observeSelf(options);
     const state = await this.deps.storage.capabilities.loadCapabilityState();
     return remoteTransport({
       selfId: this.deps.selfId,
       link: this.deps.link,
       artifacts: this.artifacts,
-    }).observe(nodeId, state.epoch);
+    }).observe(nodeId, state.epoch, options);
   }
 
   // --- Reads (`library-reads.ts`) ----------------------------------------------
@@ -779,6 +835,11 @@ export class CapabilityService {
 
   /** Command node: a leaf asked to resolve a launch (`node-capability-launch-requested`). */
   answerLeafLaunch(nodeId: string, payload: unknown): Promise<{ answered: boolean }> {
+    const transport = remoteTransport({
+      selfId: this.deps.selfId,
+      link: this.deps.link,
+      artifacts: this.artifacts,
+    });
     return answerLeafLaunch(
       {
         storage: this.deps.storage,
@@ -787,12 +848,8 @@ export class CapabilityService {
         link: this.deps.link,
         resolve: (state, input) => this.resolveFor(state, input),
         artifacts: this.artifacts,
-        stageArtifact: (target, epoch, digest) =>
-          remoteTransport({
-            selfId: this.deps.selfId,
-            link: this.deps.link,
-            artifacts: this.artifacts,
-          }).stage(target, epoch, digest),
+        observeNode: transport.observe,
+        stageArtifact: transport.stage,
         now: () => this.now(),
       },
       nodeId,

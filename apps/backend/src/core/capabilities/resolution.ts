@@ -63,6 +63,52 @@ export function assignmentSetups(
   return state.assignments[`${scope}:${id}`]?.setupIds ?? [];
 }
 
+/** Host Claude plugin evidence needed by these components, including carried parts. */
+export function managedClaudeComponents(
+  state: CapabilityState,
+  target: CapabilityTarget,
+  components: Iterable<Pick<CapabilityComponent, "id" | "dependencies">>,
+): string[] {
+  if (target.provider !== "claude" || target.environmentIncarnation !== undefined) return [];
+  const pluginIds = new Set<string>();
+  for (const component of components) {
+    pluginIds.add(component.id);
+    for (const id of component.dependencies) pluginIds.add(id);
+  }
+  return [
+    ...new Set(
+      Object.values(state.receipts)
+        .filter(
+          (receipt) =>
+            receipt.nodeId === target.nodeId &&
+            receipt.locationId === "plugin:claude" &&
+            pluginIds.has(receipt.componentId),
+        )
+        .map((receipt) => receipt.componentId),
+    ),
+  ];
+}
+
+/** Selects the receipts from the effective target and its exact package revisions. */
+export function launchManagedClaudeComponents(
+  state: CapabilityState,
+  effective: EffectiveAgentResources,
+): string[] {
+  const components = new Map(Object.entries(state.components));
+  return managedClaudeComponents(
+    state,
+    effective.target,
+    effective.resolvedPackages.flatMap((resolved) => {
+      const pkg = state.packages[resolved.id];
+      if (!pkg) return [];
+      const selected = new Set(resolved.components);
+      return (capabilityRevisionComponents(pkg, resolved.artifactDigest, components) ?? []).filter(
+        (component) => selected.has(component.id),
+      );
+    }),
+  );
+}
+
 /**
  * One target's effective resources: My setup (when the machine is
  * enrolled), then the project, template, graph-node and session

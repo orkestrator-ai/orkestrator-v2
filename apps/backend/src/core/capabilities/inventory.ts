@@ -20,7 +20,7 @@ import { CAPABILITY_LOCATIONS } from "@orkestrator/protocol/capability-resources
 import { listLocation, type CapabilityHomes } from "./native-ownership.js";
 import type { ManagedClaudePluginObservation } from "./provider-adapters/claude-plugins.js";
 
-const MAX_ITEMS = 3_000;
+export const MAX_CAPABILITY_INVENTORY_ITEMS = 3_000;
 
 export interface InventoryPlugin {
   provider: AgentPlatform;
@@ -36,11 +36,22 @@ export interface InventoryMcpServer {
   sourceLabel: string;
 }
 
+/**
+ * The native plugins the provider CLIs list. An agent whose listing could not
+ * be read is named in `errors`. The collector scopes these warnings to
+ * plugin discovery so they cannot invalidate managed removal evidence.
+ */
+export interface InventoryPluginListing {
+  plugins: InventoryPlugin[];
+  errors?: Array<{ message: string }>;
+}
+
 export interface InventorySources {
   homes: CapabilityHomes;
   /** Which providers are installed on this machine. */
   providers(): Promise<Array<{ provider: AgentPlatform; available: boolean; version?: string }>>;
-  plugins?(): Promise<InventoryPlugin[]>;
+  /** Runs provider CLIs: slow, so the service caches it (`inventory-cache.ts`). */
+  plugins?(): Promise<InventoryPluginListing>;
   /** Plugins in Orkestrator's own Claude marketplace, with the bytes Claude reads. */
   managedPlugins?(): Promise<ManagedClaudePluginObservation[]>;
   mcpServers?(): Promise<InventoryMcpServer[]>;
@@ -124,7 +135,11 @@ export async function collectCapabilityInventory(
   }
   if (sources.plugins) {
     try {
-      for (const plugin of await sources.plugins()) {
+      const listing = await sources.plugins();
+      for (const { message } of listing.errors ?? []) {
+        errors.push({ source: "plugin-discovery", message });
+      }
+      for (const plugin of listing.plugins) {
         if (managedPluginIds.has(`${plugin.provider}:${plugin.qualifiedId}`)) continue;
         items.push({
           id: `${plugin.provider}:plugin:${plugin.qualifiedId}`,
@@ -140,7 +155,7 @@ export async function collectCapabilityInventory(
         });
       }
     } catch {
-      errors.push({ message: "Could not list native plugins." });
+      errors.push({ source: "plugin-discovery", message: "Could not list native plugins." });
     }
   }
   if (sources.mcpServers) {
@@ -170,13 +185,13 @@ export async function collectCapabilityInventory(
     providers = AGENT_PLATFORMS.map((provider) => ({ provider, available: false }));
     errors.push({ message: "Could not check which agents are installed." });
   }
-  const truncated = Math.max(0, items.length - MAX_ITEMS);
+  const truncated = Math.max(0, items.length - MAX_CAPABILITY_INVENTORY_ITEMS);
   return {
     nodeId,
     observedAt: now(),
     os: `${os.platform()}-${os.arch()}`,
     providers,
-    items: items.slice(0, MAX_ITEMS),
+    items: items.slice(0, MAX_CAPABILITY_INVENTORY_ITEMS),
     truncated,
     errors,
   };

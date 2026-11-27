@@ -156,8 +156,9 @@ export class CapabilityLibraryReads {
   async getInventory(args: Record<string, unknown>): Promise<CapabilityInventory> {
     const selfId = await this.ctx.deps.selfId();
     const nodeId = typeof args.nodeId === "string" && args.nodeId ? args.nodeId : selfId;
-    if (nodeId === selfId) return this.ctx.observeSelf();
-    if (args.refresh === true) return this.ctx.observeNode(nodeId);
+    if (nodeId === selfId)
+      return this.ctx.observeSelf(args.refresh === true ? { refresh: true } : {});
+    if (args.refresh === true) return this.ctx.observeNode(nodeId, { refresh: true });
     const state = await this.loadState();
     const inventory = state.machines[nodeId]?.inventory;
     if (!inventory)
@@ -171,7 +172,8 @@ export class CapabilityLibraryReads {
     const state = await this.loadState();
     const inventory =
       nodeId === selfId
-        ? await this.ctx.observeSelf().catch(() => undefined)
+        ? // Only which providers are installed: no provider CLI's plugin listing.
+          await this.ctx.observeSelf({ launch: true }).catch(() => undefined)
         : state.machines[nodeId]?.inventory;
     return { nodeId, matrices: AGENT_PLATFORMS.map((provider) => supportFor(inventory, provider)) };
   }

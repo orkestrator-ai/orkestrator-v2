@@ -74,7 +74,7 @@ export interface CapabilityInventory {
   providers: Array<{ provider: AgentPlatform; available: boolean; version?: string }>;
   items: CapabilityObservedItem[];
   truncated: number;
-  errors: Array<{ provider?: AgentPlatform; message: string }>;
+  errors: Array<{ provider?: AgentPlatform; source?: "plugin-discovery"; message: string }>;
   /**
    * Providers with work in flight on the machine when it was observed. The
    * reconciler holds writes to shared locations they read until the work

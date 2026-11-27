@@ -45,13 +45,14 @@ export function remoteTransport(input: {
     return link;
   };
   return {
-    async observe(nodeId, epoch) {
+    async observe(nodeId, epoch, options = {}) {
       const link = connectedLink(nodeId);
       const controllerId = await input.selfId();
       try {
         const inventory = (await link.invokeCommand(getCapabilityNodeObservationCommand, {
           controllerId,
           epoch,
+          ...options,
         })) as unknown as CapabilityInventory;
         return { ...inventory, nodeId };
       } catch (error) {

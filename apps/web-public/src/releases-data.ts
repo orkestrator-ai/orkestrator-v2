@@ -51,6 +51,24 @@ export function releaseNotesUrl(release: Pick<ReleaseSummary, "tag">): string {
 
 export const RELEASES: readonly ReleaseSummary[] = [
   {
+    version: "2.39.15-beta",
+    tag: "v2.39.15-beta",
+    date: "2026-11-27",
+    channel: "beta",
+    intro: "Changes since 2.39.14-beta.",
+    new: [
+      "Right-click a ticket on the Kanban board, or a card or row on the Linear board, to open, build or delete it. Deleting a Linear issue moves it to Linear's trash, where it can be restored for 30 days.",
+      "An opt-in Review setting lets Address Findings also fix test failures that were already on the base branch, each in its own labelled commit.",
+      "Skills given to a single session now reach Pi sessions too.",
+    ],
+    improved: [
+      "Pressing Retry on a failed coordinator turn shows the new turn straight away. A retry that is declined or fails leaves the original turn as it was.",
+    ],
+    fixed: [
+      "Agent sessions start much faster: launching no longer waits on agent plugin lists, which could add 20 to 40 seconds on some machines.",
+    ],
+  },
+  {
     version: "2.39.14-beta",
     tag: "v2.39.14-beta",
     date: "2026-11-25",
@@ -126,33 +144,6 @@ export const RELEASES: readonly ReleaseSummary[] = [
     ],
     fixed: [
       "A project on another machine reads its icon, Git remote and settings from that machine, and the folder picker says which machine it is browsing.",
-    ],
-  },
-  {
-    version: "2.37.6-beta",
-    tag: "v2.37.6-beta",
-    date: "2026-11-11",
-    channel: "beta",
-    intro: "Changes since 2.37.5-beta.",
-    new: [
-      "One Merge PR button offers merge, resolve and auto-merge, including Auto-merge & Cleanup from a ticket.",
-      "Find in a transcript also searches documents you have not scrolled to yet.",
-    ],
-    improved: [
-      "Claude's tmux mode is now an experimental setting, off by default. New Claude tabs use the standard agent view, and tmux tabs already open keep running.",
-      "Local desktop windows connect to the backend directly by default. You can turn this off in Settings.",
-      "Large transcripts open faster, and an environment's network panel keeps its blocked-connection counts up to date.",
-      "Idle environments use less background work, and the database stalls less while it tidies up after a deletion.",
-    ],
-    fixed: [
-      "Auto-merge no longer stays stuck when conflicts remain after a Resolve tab finishes; it sends Resolve again.",
-      "Transcripts keep your reading place when you resize split panes or switch between pipeline steps.",
-      "Read-only Claude sessions, such as reviewers, use the model connection set in your Claude settings.",
-      "Signing out of Claude on your computer also signs out the containers that were given that login.",
-      "Containers on rootless Docker no longer fail to start because of port clashes after a Docker restart.",
-      "On macOS, file changes are no longer missed while watches start and stop. On Linux, large ignored folders are left out of watching.",
-      "A preview loading in a background tab no longer takes keyboard focus.",
-      "OpenCode 2 sessions recover when their event stream goes quiet.",
     ],
   },
 ];

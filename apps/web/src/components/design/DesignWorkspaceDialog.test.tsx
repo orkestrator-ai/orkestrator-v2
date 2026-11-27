@@ -617,7 +617,15 @@ describe("DesignWorkspaceDialog", () => {
       agentLaunchMode: "native",
       displayTitle: "Design",
     });
-    expect(agentCall?.[1]?.initialPrompt).toContain(canvas.id);
+    // No brief: nothing is sent, and the canvas guidance waits in the composer.
+    expect(agentCall?.[1]?.initialPrompt).toBeUndefined();
+    const contextDraft = nativeComposeDraft(
+      appCommandStore(nativeComposeStore).getState(),
+      createSessionKey("env-1", agentCall![1]!.tabId!),
+    );
+    expect(contextDraft.annotations).toHaveLength(1);
+    expect(contextDraft.annotations[0]!.source).toBe("design");
+    expect(contextDraft.annotations[0]!.text).toContain(`Canvas ID: ${canvas.id}`);
     expect(commandNames()).not.toContain("design_prepare");
     expect(screen.getByRole("alert").textContent).toContain("Your design was created");
     fireEvent.click(screen.getByRole("button", { name: "Open design" }));
@@ -947,6 +955,7 @@ describe("DesignWorkspaceDialog", () => {
         />,
       );
       await flush();
+      fireEvent.change(brief(), { target: { value: "A calmer checkout" } });
       const submit = screen.getByRole("button", { name: "Create design workspace" });
       fireEvent.click(submit);
       await flush();
@@ -1005,6 +1014,44 @@ describe("DesignWorkspaceDialog", () => {
       expect(screen.queryByRole("alert") === null).toBe(true);
     });
   }
+
+  test("without a brief the agent opens with no automatic prompt", async () => {
+    installLaunchCommands(async () => ({ ok: true, value: capabilities }));
+    const createTab = mock((_type: CreatableTabType, options?: CreateTabOptions) => {
+      appCommandStore(paneLayoutStore)
+        .getState()
+        .addTab("pane-1", { id: options!.tabId!, type: "plain" }, "env-1");
+      return true;
+    });
+    const onOpenChange = mock();
+    renderInAppCommandScope(
+      <DesignWorkspaceDialog
+        open
+        onOpenChange={onOpenChange}
+        environmentId="env-1"
+        createTab={createTab}
+        loadReadiness={async () => ready}
+      />,
+    );
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "Create design workspace" }));
+    await flush();
+    expect(createTab.mock.calls.map(([type]) => type)).toEqual(["design-canvas", "claude"]);
+    const agentOptions = createTab.mock.calls.find(([type]) => type === "claude")![1]!;
+    expect(agentOptions.initialPrompt).toBeUndefined();
+    expect(
+      invokeMock.mock.calls.some(([command]) => command === "enqueue_prompt_queue_message"),
+    ).toBe(false);
+    const draft = nativeComposeDraft(
+      appCommandStore(nativeComposeStore).getState(),
+      createSessionKey("env-1", agentOptions.tabId!),
+    );
+    expect(draft.text).toBe("");
+    expect(draft.annotations.map((annotation) => annotation.source)).toEqual(["design"]);
+    expect(draft.annotations[0]!.text).toContain(`Canvas ID: ${canvas.id}`);
+    expect(draft.annotations[0]!.text).not.toContain("propose an initial design mockup");
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
 
   for (const scopeChange of ["environment", "backend"] as const) {
     for (const outcome of ["resolve", "reject"] as const) {

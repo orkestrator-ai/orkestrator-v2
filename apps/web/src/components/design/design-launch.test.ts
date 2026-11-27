@@ -11,6 +11,7 @@ import { DesignClientError, getCapabilities, resetCapabilities } from "@/lib/des
 import { invoke } from "@/lib/native/backend";
 import {
   buildDesignAgentPrompt,
+  designAgentOpening,
   DesignLaunchError,
   importAndOpenDesign,
   launchDesignWorkspace,
@@ -18,6 +19,7 @@ import {
   readDesignImport,
   runDesignLifecycle,
   validateDesignName,
+  type DesignAgentOpening,
   type DesignLaunchOptions,
 } from "./design-launch";
 
@@ -57,9 +59,11 @@ function harness(overrides: Partial<DesignLaunchOptions> = {}) {
       tabs.add(tabId);
       return true;
     }),
-    createAgentTab: mock((agent: string, tabId: string, prompt: string) => {
+    createAgentTab: mock((agent: string, tabId: string, opening: DesignAgentOpening) => {
       calls.push(`agent:${agent}:${tabId}`);
-      expect(prompt).toContain(canvas.id);
+      expect(opening.kind === "prompt" ? opening.prompt : opening.annotation.text).toContain(
+        canvas.id,
+      );
       tabs.add(tabId);
       return true;
     }),
@@ -101,10 +105,28 @@ describe("design workspace launch transaction", () => {
       "link-session",
       "done",
     ]);
-    const initialPrompt = (options.createAgentTab as ReturnType<typeof mock>).mock.calls[0]?.[2];
+    const opening = (options.createAgentTab as ReturnType<typeof mock>).mock.calls[0]?.[2];
+    expect(opening.kind).toBe("prompt");
+    const initialPrompt = opening.prompt;
     expect(initialPrompt).toStartWith(SYSTEM_INSTRUCTIONS_FRAME_OPEN);
     expect(initialPrompt).toContain(`Canvas ID: ${canvas.id}`);
     expect(userPromptDisplayText(initialPrompt)).toBe("Build it");
+  });
+
+  test("without a brief the agent tab sends nothing and holds the canvas guidance as context", async () => {
+    const { calls, options } = harness({ brief: "   " });
+    await launchDesignWorkspace(options);
+    expect(calls).toContain("agent:codex:agent-tab");
+    const opening = (options.createAgentTab as ReturnType<typeof mock>).mock.calls[0]?.[2];
+    expect(opening.kind).toBe("context");
+    expect(opening.annotation).toMatchObject({
+      id: "agent-tab-design-context",
+      source: "design",
+      comment: "",
+    });
+    expect(opening.annotation.text).toContain(`Canvas ID: ${canvas.id}`);
+    expect(opening.annotation.text).toContain('Canvas: "Design"');
+    expect(opening.annotation.text).not.toContain("propose an initial design mockup");
   });
 
   test("a blank canvas creates no agent tab and no session link", async () => {
@@ -207,8 +229,10 @@ describe("design inputs", () => {
     expect(validateDesignName(`  ${"x".repeat(120)}  `)).toBeNull();
   });
 
-  test("the agent prompt recommends compact, conflict-safe tools and save_canvas", () => {
-    const prompt = buildDesignAgentPrompt("canvas-1", "  ");
+  test("the agent guidance recommends compact, conflict-safe tools and save_canvas", () => {
+    const prompt = buildDesignAgentPrompt("canvas-1", "Mock it up");
+    const context = designAgentOpening({ id: "canvas-1", name: "Design" }, "", "context-1");
+    if (context.kind !== "context") throw new Error("expected a context opening");
     for (const expected of [
       "Canvas ID: canvas-1",
       "get_canvas_summary",
@@ -218,9 +242,10 @@ describe("design inputs", () => {
       "capture_frame",
       "save_canvas",
       "replaceFingerprint",
-      "propose an initial design mockup",
-    ])
+    ]) {
       expect(prompt).toContain(expected);
+      expect(context.annotation.text).toContain(expected);
+    }
   });
 
   test("frames the canvas guidance so the transcript shows only the brief", () => {
@@ -229,9 +254,13 @@ describe("design inputs", () => {
     expect(prompt).toContain("Canvas ID: canvas-1");
     expect(prompt.endsWith("\n\nMock up the sidebar")).toBe(true);
     expect(userPromptDisplayText(prompt)).toBe("Mock up the sidebar");
-    expect(userPromptDisplayText(buildDesignAgentPrompt("canvas-1", ""))).toBe(
-      "Review this repository and propose an initial design mockup.",
-    );
+  });
+
+  test("only a brief produces an opening prompt; none is invented", () => {
+    expect(designAgentOpening({ id: "canvas-1", name: "Design" }, "  ", "c").kind).toBe("context");
+    const opening = designAgentOpening({ id: "canvas-1", name: "Design" }, " Go ", "c");
+    expect(opening.kind).toBe("prompt");
+    if (opening.kind === "prompt") expect(userPromptDisplayText(opening.prompt)).toBe("Go");
   });
 });
 

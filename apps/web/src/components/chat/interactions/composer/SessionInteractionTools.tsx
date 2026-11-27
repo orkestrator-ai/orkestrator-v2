@@ -53,7 +53,12 @@ export function SessionInteractionTools({
   );
   return (
     <>
-      <div className="flex items-center" data-testid="session-interaction-tools">
+      {/*
+        Hidden in a narrow chat (under 32rem of the nearest container: a phone,
+        or the design tab's agent panel), where the composer toolbar is too
+        cramped; attachments (+) then lead the row.
+      */}
+      <div className="flex items-center @max-lg:hidden" data-testid="session-interaction-tools">
         {button("deliverables", "Session deliverables", <PanelsTopLeft className="size-4" />)}
         {button("demo", "Record a demonstration", <Video className="size-4" />)}
       </div>

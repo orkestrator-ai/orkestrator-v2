@@ -1333,6 +1333,43 @@ describe("TerminalContainer", () => {
       );
     });
 
+    test.each(["claude", "codex"] as const)(
+      "locks a %s design tab without an opening prompt",
+      async (platform) => {
+        const options: CreateTabOptions = {
+          tabId: "design-agent",
+          agentLaunchMode: "native",
+          lockNativePlatform: true,
+          initialFastMode: true,
+        };
+        renderInAppCommandScope(
+          <TerminalProvider>
+            <TerminalContainer
+              environmentId="env-visible"
+              containerId="container-visible"
+              isContainerRunning
+              isActive
+            />
+            <CreateTabHarness type={platform} options={options} />
+          </TerminalProvider>,
+        );
+
+        await waitFor(() =>
+          expect(
+            appCommandStore(paneLayoutStore).getState().getAllTabs("env-visible"),
+          ).toContainEqual(
+            expect.objectContaining({
+              id: options.tabId,
+              type: "agent-native",
+              nativeAgentData: expect.objectContaining({ platform }),
+              initialPrompt: undefined,
+              initialFastMode: true,
+            }),
+          ),
+        );
+      },
+    );
+
     test("opens a backend workflow provider session in the created native tab", async () => {
       renderInAppCommandScope(
         <TerminalProvider>

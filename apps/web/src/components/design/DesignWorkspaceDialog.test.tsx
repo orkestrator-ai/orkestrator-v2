@@ -617,7 +617,7 @@ describe("DesignWorkspaceDialog", () => {
       agentLaunchMode: "native",
       displayTitle: "Design",
     });
-    // No brief: nothing is sent, and the canvas guidance waits in the composer.
+    // No brief: nothing is sent, and the canvas context waits in the composer.
     expect(agentCall?.[1]?.initialPrompt).toBeUndefined();
     const contextDraft = nativeComposeDraft(
       appCommandStore(nativeComposeStore).getState(),
@@ -1039,6 +1039,7 @@ describe("DesignWorkspaceDialog", () => {
     expect(createTab.mock.calls.map(([type]) => type)).toEqual(["design-canvas", "claude"]);
     const agentOptions = createTab.mock.calls.find(([type]) => type === "claude")![1]!;
     expect(agentOptions.initialPrompt).toBeUndefined();
+    expect(agentOptions.lockNativePlatform).toBe(true);
     expect(
       invokeMock.mock.calls.some(([command]) => command === "enqueue_prompt_queue_message"),
     ).toBe(false);
@@ -1051,6 +1052,25 @@ describe("DesignWorkspaceDialog", () => {
     expect(draft.annotations[0]!.text).toContain(`Canvas ID: ${canvas.id}`);
     expect(draft.annotations[0]!.text).not.toContain("propose an initial design mockup");
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  test("clears the context-only draft when the agent tab cannot open", async () => {
+    let agentSessionKey: string | undefined;
+    const drafts = appCommandStore(nativeComposeStore);
+    const createTab = mock((type: CreatableTabType, options?: CreateTabOptions) => {
+      if (type === "design-canvas") return true;
+      agentSessionKey = createSessionKey("env-1", options!.tabId!);
+      expect(drafts.getState().drafts.get(agentSessionKey)?.annotations).toHaveLength(1);
+      return false;
+    });
+    const { onOpenChange } = mount(createTab);
+    await flush();
+    fireEvent.click(screen.getByRole("button", { name: "Create design workspace" }));
+    await flush();
+    expect(screen.getByRole("alert").textContent).toContain("Could not open the design agent tab");
+    expect(agentSessionKey).toBeDefined();
+    expect(drafts.getState().drafts.has(agentSessionKey!)).toBe(false);
+    expect(onOpenChange).not.toHaveBeenCalledWith(false);
   });
 
   for (const scopeChange of ["environment", "backend"] as const) {

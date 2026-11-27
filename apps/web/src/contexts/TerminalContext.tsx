@@ -63,6 +63,8 @@ export interface CreateTabOptions {
   hideStructuredOutput?: boolean;
   /** Optional one-shot agent launch mode that overrides repository/global defaults. */
   agentLaunchMode?: AgentLaunchModeOverride;
+  /** Bind a native tab to the selected provider even without an opening prompt. */
+  lockNativePlatform?: boolean;
   /** Optional one-shot model selection for this agent tab. */
   initialAgentModel?: string;
   /** Optional one-shot reasoning effort or provider variant for this agent tab. */

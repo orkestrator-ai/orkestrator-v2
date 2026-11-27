@@ -1,3 +1,4 @@
+import { buildNativeComposerPrompt } from "@/lib/chat/design-opening-context";
 import { describe, expect, mock, test } from "bun:test";
 import type { DesignCanvas } from "@orkestrator/protocol/design-canvas";
 import type {
@@ -113,7 +114,7 @@ describe("design workspace launch transaction", () => {
     expect(userPromptDisplayText(initialPrompt)).toBe("Build it");
   });
 
-  test("without a brief the agent tab sends nothing and holds the canvas guidance as context", async () => {
+  test("without a brief the agent tab sends nothing and holds the canvas identity as context", async () => {
     const { calls, options } = harness({ brief: "   " });
     await launchDesignWorkspace(options);
     expect(calls).toContain("agent:codex:agent-tab");
@@ -126,7 +127,7 @@ describe("design workspace launch transaction", () => {
     });
     expect(opening.annotation.text).toContain(`Canvas ID: ${canvas.id}`);
     expect(opening.annotation.text).toContain('Canvas: "Design"');
-    expect(opening.annotation.text).not.toContain("propose an initial design mockup");
+    expect(opening.annotation.text).not.toContain("save_canvas");
   });
 
   test("a blank canvas creates no agent tab and no session link", async () => {
@@ -231,8 +232,13 @@ describe("design inputs", () => {
 
   test("the agent guidance recommends compact, conflict-safe tools and save_canvas", () => {
     const prompt = buildDesignAgentPrompt("canvas-1", "Mock it up");
-    const context = designAgentOpening({ id: "canvas-1", name: "Design" }, "", "context-1");
+    const context = designAgentOpening(
+      { id: "canvas-1", name: "Design" },
+      "",
+      "tab-design-context",
+    );
     if (context.kind !== "context") throw new Error("expected a context opening");
+    const firstMessage = buildNativeComposerPrompt("Mock it up", "tab", [context.annotation]);
     for (const expected of [
       "Canvas ID: canvas-1",
       "get_canvas_summary",
@@ -244,7 +250,7 @@ describe("design inputs", () => {
       "replaceFingerprint",
     ]) {
       expect(prompt).toContain(expected);
-      expect(context.annotation.text).toContain(expected);
+      expect(firstMessage).toContain(expected);
     }
   });
 

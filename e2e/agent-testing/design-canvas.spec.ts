@@ -647,3 +647,111 @@ test("an image brief drains after enqueue acknowledgement and fallback failure w
     }
   }
 });
+
+test("a blank design keeps its unsent draft in the real agent panel across reload", async ({
+  page,
+}) => {
+  const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "codex-qa";
+  const status = JSON.parse(
+    spawnSync("mise", ["run", "dev:status", "--profile", profile, "--json"], { encoding: "utf8" })
+      .stdout,
+  );
+  const login = JSON.parse(
+    spawnSync("mise", ["run", "dev:login", "--profile", profile, "--json"], { encoding: "utf8" })
+      .stdout,
+  );
+  const attemptedSends: string[] = [];
+  await page.route("**/__orkestrator/invoke", async (route) => {
+    const command = route.request().postDataJSON()?.command;
+    if (command === "check_claude_cli") await route.fulfill({ json: { result: false } });
+    else if (
+      command === "dispatch_native_agent_intent" ||
+      command === "enqueue_prompt_queue_message"
+    ) {
+      attemptedSends.push(command);
+      await route.abort();
+    } else await route.continue();
+  });
+  await page.goto(login.loginUrl);
+  const invoke = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
+    const response = await page.request.post(
+      new URL("/__orkestrator/invoke", status.browserUrl).href,
+      { data: { command, args } },
+    );
+    expect(response.ok(), command).toBe(true);
+    return (await response.json()).result;
+  };
+  const projects =
+    await invoke<Array<{ id: string; name: string; localPath: string }>>("get_projects");
+  const project = projects.find((candidate) => candidate.localPath === status.testProject)!;
+  const env = await invoke<{ id: string; name: string }>("create_environment", {
+    projectId: project.id,
+    name: "design-draft-reload",
+    environmentType: "local",
+    networkAccessMode: "restricted",
+  });
+  const selectEnvironment = async () => {
+    await ensureProjectExpanded(page, project.name);
+    await page.getByText(env.name, { exact: true }).first().click();
+  };
+
+  try {
+    await invoke("start_environment", { environmentId: env.id });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.reload();
+    await selectEnvironment();
+    await page.getByRole("button", { name: "New design workspace" }).click();
+    await page.getByRole("textbox", { name: "Name", exact: true }).fill("Draft design");
+    await page.getByRole("combobox", { name: "Design agent", exact: true }).click();
+    await page.getByRole("option", { name: "Codex", exact: true }).click();
+    await page.getByRole("button", { name: "Create design workspace", exact: true }).click();
+
+    const panel = page.getByRole("region", { name: "Agent panel" });
+    const input = panel.getByRole("textbox");
+    const chip = panel.getByRole("button", { name: "Remove design context" });
+    await expect(chip).toBeVisible();
+    await expect(input).toHaveAttribute("aria-placeholder", "Message Codex");
+    await expect(input).toBeEmpty();
+    await input.press("Enter");
+    await expect(input).toBeEmpty();
+    const tools = panel.getByTestId("session-interaction-tools");
+    await expect(panel.getByRole("button", { name: "Add attachment" })).toBeVisible();
+    await expect(tools).toHaveCount(1);
+    await expect(tools).toBeHidden();
+    await panel.screenshot({ path: "output/visual-previews/design-opening-real-desktop.png" });
+    const resize = page.getByRole("separator", { name: "Resize agent panel" });
+    await resize.press("End");
+    await expect(panel.getByRole("button", { name: "Session deliverables" })).toBeVisible();
+    await expect(panel.getByRole("button", { name: "Record a demonstration" })).toBeVisible();
+    await panel.screenshot({ path: "output/visual-previews/design-opening-real-wide.png" });
+    await resize.press("Home");
+
+    const draftText = "Keep this design draft";
+    await input.fill(draftText);
+    let agentTabId: string | undefined;
+    await expect
+      .poll(async () => {
+        const layout = await invoke<{ root: unknown } | null>("get_pane_layout", {
+          environmentId: env.id,
+        });
+        agentTabId = /"id":"(design-agent-[^"]+)"/.exec(JSON.stringify(layout?.root ?? {}))?.[1];
+        return agentTabId;
+      })
+      .toBeTruthy();
+    const draftKey = `codex:${env.id}:${encodeURIComponent(`env-${env.id}:${agentTabId}`)}`;
+    await expect
+      .poll(async () => invoke("get_compose_draft", { draftKey }))
+      .toMatchObject({
+        value: { text: draftText, annotations: [{ source: "design" }] },
+      });
+
+    await page.reload();
+    await selectEnvironment();
+    await expect(input).toHaveText(draftText);
+    await expect(chip).toBeVisible();
+    expect(attemptedSends).toEqual([]);
+  } finally {
+    await invoke("stop_environment", { environmentId: env.id }).catch(() => undefined);
+    await invoke("delete_environment", { environmentId: env.id }).catch(() => undefined);
+  }
+});

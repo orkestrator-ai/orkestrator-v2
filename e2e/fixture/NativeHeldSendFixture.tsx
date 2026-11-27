@@ -6,6 +6,8 @@ import {
   type NativeAgentPendingSignIn,
 } from "@orkestrator/protocol/native-agent";
 import { AgentNativeTab } from "../../apps/web/src/components/native-agent/AgentNativeTab";
+import { buildDesignAgentContextAnnotation } from "../../apps/web/src/components/design/design-launch";
+import { nativeComposeStore } from "../../apps/web/src/stores/nativeComposeStore";
 import { useEnvironmentStore } from "../../apps/web/src/stores/environmentStore";
 import { appCommandStore } from "../../apps/web/src/test/app-command-store";
 
@@ -18,11 +20,11 @@ const identity: NativeAgentViewIdentity = {
   sourceGeneration: "generation-1",
 };
 
-function installBackend() {
+function installBackend(initiallyReady: boolean) {
   const annotationText = new URLSearchParams(window.location.search).has("annotations")
     ? "The header needs more spacing"
     : "";
-  let ready = sessionStorage.getItem("held-send-ready") === "true";
+  let ready = initiallyReady || sessionStorage.getItem("held-send-ready") === "true";
   let authenticationRequired = sessionStorage.getItem("held-send-auth-required") === "true";
   let pendingSignIn = JSON.parse(
     sessionStorage.getItem("held-sign-in") ?? "null",
@@ -39,6 +41,17 @@ function installBackend() {
       turn: { phase: "idle" },
       interactions: [],
       composerControls: [],
+      ...(initiallyReady
+        ? {
+            composer: {
+              models: [{ platform: "codex", id: "gpt-5.4", label: "GPT-5.4", supportsSpeed: true }],
+              selectedModelId: "gpt-5.4",
+              fastModeAvailable: true,
+              fastModeEnabled: true,
+              modes: [],
+            },
+          }
+        : {}),
       capabilities: nativeAgentCapabilities("codex"),
       notices: [],
       ...(authenticationRequired
@@ -196,22 +209,44 @@ function installBackend() {
 
 let backend: ReturnType<typeof installBackend> | undefined;
 
-export function NativeHeldSendFixture() {
-  const [transport] = useState(() => (backend ??= installBackend()));
+export function NativeHeldSendFixture({
+  showHarness = true,
+  designContext = false,
+}: { showHarness?: boolean; designContext?: boolean } = {}) {
+  const [transport] = useState(() => {
+    if (designContext) {
+      appCommandStore(nativeComposeStore)
+        .getState()
+        .updateDraft(identity.logicalSessionKey, {
+          annotations: [
+            buildDesignAgentContextAnnotation({
+              id: "held-tab-design-context",
+              canvasId: "canvas-1",
+              canvasName: "First design",
+            }),
+          ],
+        });
+    }
+    return (backend ??= installBackend(!showHarness));
+  });
   const [away, setAway] = useState(false);
   const [count, setCount] = useState(transport.count());
   return (
-    <main className="flex h-screen flex-col bg-background text-foreground">
-      <nav className="flex flex-wrap gap-3 p-2">
-        <button onClick={() => setAway(!away)}>
-          {away ? "Return to conversation" : "Switch environment"}
-        </button>
-        <button onClick={() => transport.release()}>Release session state</button>
-        <button onClick={() => transport.release(true)}>Require sign in</button>
-        <button onClick={() => transport.completeLogin()}>Complete sign in</button>
-        <button onClick={() => setCount(transport.count())}>Read dispatch count</button>
-        <output aria-label="Dispatch count">{count}</output>
-      </nav>
+    <main
+      className={`flex ${showHarness ? "h-screen" : "h-full"} flex-col bg-background text-foreground`}
+    >
+      {showHarness ? (
+        <nav className="flex flex-wrap gap-3 p-2">
+          <button onClick={() => setAway(!away)}>
+            {away ? "Return to conversation" : "Switch environment"}
+          </button>
+          <button onClick={() => transport.release()}>Release session state</button>
+          <button onClick={() => transport.release(true)}>Require sign in</button>
+          <button onClick={() => transport.completeLogin()}>Complete sign in</button>
+          <button onClick={() => setCount(transport.count())}>Read dispatch count</button>
+          <output aria-label="Dispatch count">{count}</output>
+        </nav>
+      ) : null}
       <section className="min-h-0 flex-1">
         {away ? (
           <p>Another environment is active</p>

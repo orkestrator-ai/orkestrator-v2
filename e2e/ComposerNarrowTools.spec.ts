@@ -10,11 +10,14 @@ for (const [width, narrow] of [
   test(`a ${width}px chat column ${narrow ? "hides" : "shows"} the session tools`, async ({
     page,
   }, testInfo) => {
-    await page.setViewportSize({ width: Math.max(width + 40, 400), height: 360 });
-    await page.goto(`/composer-narrow-tools?width=${width}`);
+    await page.setViewportSize({ width: Math.max(width + 40, 480), height: 360 });
+    await page.goto(`/composer-narrow-tools?width=${width}&design-context`);
+    await expect(page.getByText("Design context", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Send", exact: true })).toBeDisabled();
     const tools = page.getByTestId("session-interaction-tools");
     const add = page.getByRole("button", { name: "Add attachment" });
     await expect(add).toBeVisible();
+    await expect(tools).toHaveCount(1);
     if (narrow) {
       await expect(tools).toBeHidden();
       await expect(page.getByRole("button", { name: "Session deliverables" })).toBeHidden();
@@ -33,7 +36,7 @@ for (const [width, narrow] of [
     }
     if (testInfo.project.name === "desktop-chromium")
       await page.getByTestId("chat-column").screenshot({
-        path: `output/visual-previews/composer-tools-${width}px.png`,
+        path: `output/visual-previews/design-opening-after-${width}px.png`,
       });
   });
 }

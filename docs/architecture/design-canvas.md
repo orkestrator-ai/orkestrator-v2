@@ -20,10 +20,10 @@ canvas that remembers the file as its save location (`design_open_file`,
 reason and **Check again**, when the backend, storage or renderer is unavailable.
 
 The brief is optional. Without one nothing is sent and no prompt is invented:
-the canvas guidance (canvas ID, design tool usage) is placed in the new agent
-tab's composer as a removable design-context annotation
-(`designAgentOpening` in `design/design-launch.ts`), so it travels with the
-user's own first message.
+the new tab opens on the selected provider. A removable design-context chip
+identifies the canvas and travels with the user's first message or attachment.
+While the chip is present, that message also carries the design tool guidance
+in a system-instructions frame.
 
 A brief is the new agent tab's opening prompt, and the backend owns sending
 it. `handTabInitialPromptToBackend` (`apps/web/src/lib/tab-initial-prompt.ts`)

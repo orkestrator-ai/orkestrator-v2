@@ -1,8 +1,9 @@
 import type { CoordinatorOpeningPrompt } from "./startup-prompt-preview";
 import { createLogger, formatLogError } from "@orkestrator/protocol/logger";
+import { parseCommandToken } from "@orkestrator/protocol/agent-slash-commands";
 import { parseUserCommand } from "@orkestrator/protocol/user-commands";
 import { resolvedDefaultAgent, resolvedPlatformSettings } from "@/lib/agent-settings";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { History } from "lucide-react";
 import {
   AGENT_PLATFORMS,
@@ -56,9 +57,11 @@ import {
 import { buildInitialPromptWithAttachmentReferences } from "@/lib/initial-prompt-attachments";
 import type { NativeMessage, NativeMessagePart } from "@/lib/chat/native-message-types";
 import {
-  buildPromptWithTranscriptAnnotations,
-  sendableTranscriptAnnotations,
-} from "@/lib/chat/transcript-annotations";
+  buildNativeComposerPrompt,
+  DESIGN_OPENING_COMMAND_REFUSAL,
+  hasDesignOpeningContext,
+  hasStandaloneAnnotations,
+} from "@/lib/chat/design-opening-context";
 import {
   snapshotNativeAgentActivity,
   type NativeAgentActivitySnapshot,
@@ -495,12 +498,16 @@ export function UnassignedNativeAgentComposer({
     toggleFavorite,
     reorderFavorites: reorderAllFavorites,
   } = useAgentModelFavorites();
+  // Older blank-brief design tabs were persisted without a provider lock.
+  const isDeferredDesign = /^design-agent-\d+-\d+$/.test(tabId);
   const enabledPlatforms = useMemo(
     () =>
-      platformFilter
-        ? allEnabledPlatforms.filter((candidate) => platformFilter.includes(candidate))
-        : allEnabledPlatforms,
-    [allEnabledPlatforms, platformFilter],
+      allEnabledPlatforms.filter(
+        (candidate) =>
+          (!platformFilter || platformFilter.includes(candidate)) &&
+          (!isDeferredDesign || candidate === "claude" || candidate === "codex"),
+      ),
+    [allEnabledPlatforms, isDeferredDesign, platformFilter],
   );
   // Favourites are global. One on a platform this composer cannot start (a
   // coordinator's unqualified platform, or one switched off) would be a
@@ -531,7 +538,10 @@ export function UnassignedNativeAgentComposer({
   const modelCatalogMountedRef = useRef(false);
   const modelCatalogRetriedRef = useRef(new Set<string>());
   const [modelCatalogRetryRevision, setModelCatalogRetryRevision] = useState(0);
-  const platform = draft.platform ?? defaultPlatform;
+  const platform =
+    draft.platform && (!isDeferredDesign || enabledPlatforms.includes(draft.platform))
+      ? draft.platform
+      : defaultPlatform;
   const configured = resolvedPlatformSettings(
     config,
     envProjectId ?? projectId,
@@ -554,16 +564,10 @@ export function UnassignedNativeAgentComposer({
   );
   // One-shot create-dialog choices are tab-owned so they survive the backend
   // consuming `pendingAgentLaunch`. Seed them into the draft without locking
-  // the platform — a later picker change must win, and a platform switch must
-  // not re-apply the original create-dialog model onto the new provider.
-  const seededInitialPreselectRef = useRef(false);
-  const configuredFastModeRef = useRef(configured.fastMode);
-  // Declared before the seeding effect so it runs first in the same commit.
-  useLayoutEffect(() => {
-    configuredFastModeRef.current = configured.fastMode;
-  }, [configured.fastMode]);
-  useLayoutEffect(() => {
-    if (seededInitialPreselectRef.current) return;
+  // the platform. A saved draft owns its options, so apply launch choices
+  // only after persistence has checked for it.
+  const applyInitialPreselect = () => {
+    if (composeDrafts.getState().drafts.has(sessionKey)) return;
     const hasInitialPreselect = Boolean(
       initialAgentPlatform ||
       initialAgentModel ||
@@ -573,43 +577,30 @@ export function UnassignedNativeAgentComposer({
       initialExecutionProfileId,
     );
     if (!hasInitialPreselect) return;
-    const current = composeDrafts.getState().drafts.get(sessionKey);
     const seeded: Partial<typeof draft> = {};
-    if (initialAgentPlatform && current?.platform === undefined) {
+    if (initialAgentPlatform) {
       seeded.platform = initialAgentPlatform;
     }
-    if (initialAgentModel && current?.modelId === undefined) {
+    if (initialAgentModel) {
       seeded.modelId = initialAgentModel;
     }
-    if (initialReasoningEffort && current?.reasoningId === undefined) {
+    if (initialReasoningEffort) {
       seeded.reasoningId = initialReasoningEffort;
     }
-    if (initialConversationMode && current === undefined) {
+    if (initialConversationMode) {
       seeded.mode = initialConversationMode;
     }
-    if (typeof initialFastMode === "boolean" && current === undefined) {
+    if (typeof initialFastMode === "boolean") {
       seeded.fastMode = initialFastMode;
     }
-    if (initialExecutionProfileId && current?.executionProfileId === undefined) {
+    if (initialExecutionProfileId) {
       seeded.executionProfileId = initialExecutionProfileId;
     }
-    seededInitialPreselectRef.current = true;
-    if (Object.keys(seeded).length === 0) return;
     updateStoreDraft(sessionKey, {
-      ...(current ? {} : { fastMode: configuredFastModeRef.current ?? false }),
+      fastMode: configured.fastMode ?? false,
       ...seeded,
     });
-  }, [
-    composeDrafts,
-    initialAgentModel,
-    initialAgentPlatform,
-    initialConversationMode,
-    initialExecutionProfileId,
-    initialFastMode,
-    initialReasoningEffort,
-    sessionKey,
-    updateStoreDraft,
-  ]);
+  };
   const draftRestoreGeneration = useNativeComposeDraftPersistence(
     "agent-native",
     environmentId,
@@ -617,6 +608,7 @@ export function UnassignedNativeAgentComposer({
     unassignedNativeComposePersistence(composeDrafts),
     undefined,
     composeScope,
+    applyInitialPreselect,
   );
   useEffect(() => {
     modelCatalogMountedRef.current = true;
@@ -814,12 +806,13 @@ export function UnassignedNativeAgentComposer({
   const selectedReasoningLabel =
     selectedModel?.reasoning?.find((option) => option.id === selectedReasoningId)?.label ??
     "Default";
-  // Set when a first message starting with `!` was refused; shown under the
-  // composer until the text no longer starts with one.
-  const [commandRefused, setCommandRefused] = useState(false);
+  // Keep command refusals next to the draft the user can edit.
+  const [commandRefused, setCommandRefused] = useState<string | null>(null);
   const handleTextAndMentionsChange = useCallback(
     (text: string, mentions: FileMention[]) => {
-      if (!parseUserCommand(text)) setCommandRefused(false);
+      setCommandRefused((current) =>
+        current === FIRST_MESSAGE_COMMAND_RULE && parseUserCommand(text) ? current : null,
+      );
       updateDraft(sessionKey, { text, mentions });
     },
     [sessionKey, updateDraft],
@@ -931,24 +924,36 @@ export function UnassignedNativeAgentComposer({
 
   // Annotations (a design context, a quoted excerpt) join the first prompt the
   // same way the locked composer adds them to every later one.
-  const hasSendableAnnotations = sendableTranscriptAnnotations(draft.annotations).length > 0;
+  const hasSendableContent =
+    Boolean(draft.text.trim()) ||
+    draft.attachments.length > 0 ||
+    hasStandaloneAnnotations(tabId, draft.annotations);
   const send = () => {
+    if (disabled || !hasSendableContent) return;
     // A `!` command needs the tab's conversation to show it and an agent to
     // hear about it; neither exists until the first prompt starts one. The
     // rule stays under the composer, with the text still in the box, until
     // the text changes so it no longer starts with `!`.
     if (parseUserCommand(draft.text)) {
-      setCommandRefused(true);
+      setCommandRefused(FIRST_MESSAGE_COMMAND_RULE);
       return;
     }
-    const prompt = buildPromptWithTranscriptAnnotations(
+    if (
+      parseCommandToken(draft.text, ["/", "$"]) &&
+      hasDesignOpeningContext(tabId, draft.annotations)
+    ) {
+      setCommandRefused(DESIGN_OPENING_COMMAND_REFUSAL);
+      return;
+    }
+    const prompt = buildNativeComposerPrompt(
       buildInitialPromptWithAttachmentReferences(
         serializeForLLM(draft.text, draft.mentions),
         draft.attachments.map(({ name, path }) => ({ name, path })),
       ),
+      tabId,
       draft.annotations,
     );
-    if (!prompt.trim() || disabled) return;
+    if (!prompt.trim()) return;
     onSend(platform, prompt, {
       modelId: selectedModel?.id,
       reasoningId: selectedReasoningId,
@@ -1033,6 +1038,9 @@ export function UnassignedNativeAgentComposer({
           annotations={composerShows.annotations}
           onClearAnnotations={() => {
             if (disabled) return;
+            setCommandRefused((current) =>
+              current === DESIGN_OPENING_COMMAND_REFUSAL ? null : current,
+            );
             const annotationIds = new Set(draft.annotations.map((annotation) => annotation.id));
             updateDraft(sessionKey, {
               annotations: [],
@@ -1225,20 +1233,17 @@ export function UnassignedNativeAgentComposer({
               ) : null}
             </>
           }
-          sendDisabled={
-            disabled ||
-            (!draft.text.trim() && draft.attachments.length === 0 && !hasSendableAnnotations)
-          }
+          sendDisabled={disabled || !hasSendableContent}
           sendTitle="Start agent"
           onSend={send}
           footer={
-            commandRefused && parseUserCommand(draft.text) ? (
+            commandRefused ? (
               <p
                 role="alert"
                 data-unassigned-command-refusal
                 className="mt-1.5 px-1 text-center text-xs text-balance text-amber-300"
               >
-                {FIRST_MESSAGE_COMMAND_RULE}
+                {commandRefused}
               </p>
             ) : hint ? (
               <div

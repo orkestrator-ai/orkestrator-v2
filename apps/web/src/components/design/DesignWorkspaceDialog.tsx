@@ -439,7 +439,7 @@ export function DesignWorkspaceDialog({
             throw new Error(
               "Too many images for this conversation. Remove some images and try again.",
             );
-          // Without a brief nothing is sent: the canvas guidance waits in the
+          // Without a brief nothing is sent: the canvas context waits in the
           // composer and goes with the user's own first message.
           const initialPrompt = opening.kind === "prompt" ? opening.prompt : undefined;
           if (opening.kind === "context") {
@@ -462,6 +462,7 @@ export function DesignWorkspaceDialog({
               tabId,
               agentLaunchMode: "native",
               displayTitle: "Design",
+              lockNativePlatform: true,
               ...(initialPrompt ? { initialPrompt } : {}),
               initialAgentModel: promptOptions.model,
               initialReasoningEffort: promptOptions.reasoningEffort,

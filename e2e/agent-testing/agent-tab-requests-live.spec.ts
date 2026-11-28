@@ -21,12 +21,13 @@
  * Measurements are command names, counts and byte totals. Prompts, transcript
  * text, tokens and session ids never reach the output.
  */
-import { expect, test, fetchModulesOutsideChromium, type Page, type Request } from "./browser-test";
+import { expect, test, fetchModulesOutsideChromium, type Page } from "./browser-test";
 import { spawnSync } from "node:child_process";
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { appendFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
+import { openRecordedSession, runOptionalReconnect } from "./agent-tab-requests-support.js";
 import { watchEventStream } from "./event-stream-outage.js";
 
 type Status = { status: string; profile?: string; browserUrl?: string; testProject?: string };
@@ -40,13 +41,6 @@ type CommandBucket = {
   durationMs: number;
 };
 type GatewayMetrics = { commands: Record<string, CommandBucket> };
-type SessionRequest = {
-  at: number;
-  command: string;
-  wireBytes: number;
-  /** A discovery answer's shape (`discoveryShape`); content free. */
-  discovery?: Record<string, unknown>;
-};
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "codex-qa";
@@ -62,94 +56,6 @@ const SLEEP_SECONDS = 75;
 /** The two-viewer case also opens a second page before its window. */
 const TWO_VIEWER_SLEEP_SECONDS = 110;
 const TURN_DEADLINE_MS = 5 * 60_000;
-
-/**
- * Stop `running-quiet` after its window instead of running the reconnect turn:
- * one billed turn fewer when only the window's numbers are wanted.
- */
-const SKIP_RECONNECT = process.env.ORKESTRATOR_AGENT_TEST_TAB_REQUESTS_SKIP_RECONNECT === "1";
-
-const shortHash = (value: unknown) =>
-  createHash("sha256")
-    .update(JSON.stringify(value) ?? "")
-    .digest("hex")
-    .slice(0, 10);
-
-/**
- * One `get_native_agent_discovery_update` answer reduced to what says why it
- * was the size it was: its status, whether the token the page sent matched,
- * and per section the availability, revision, bytes, entry count and a short
- * value hash, so two snapshots show which section moved. Hashes, counts and
- * names of summary fields only: no command, model, server or notice text.
- */
-function discoveryShape(text: string, sent: { knownToken?: unknown; forceSnapshot?: unknown }) {
-  let result: {
-    status?: string;
-    resetReason?: string;
-    token?: string;
-    value?: { sections?: Record<string, Record<string, unknown>> };
-  } = {};
-  try {
-    result = (JSON.parse(text) as { result?: typeof result }).result ?? {};
-  } catch {
-    return { status: "unreadable", responseBytes: Buffer.byteLength(text) };
-  }
-  const sections = result.value?.sections;
-  return {
-    status: result.status,
-    resetReason: result.resetReason,
-    token: shortHash(result.token),
-    sentToken: typeof sent.knownToken === "string" ? shortHash(sent.knownToken) : null,
-    forceSnapshot: sent.forceSnapshot === true,
-    responseBytes: Buffer.byteLength(text),
-    ...(sections
-      ? {
-          sections: Object.fromEntries(
-            Object.entries(sections).map(([name, section]) => {
-              const value = section.value;
-              const summary =
-                value && typeof value === "object" && !Array.isArray(value)
-                  ? ((value as { summary?: Record<string, unknown> }).summary ?? undefined)
-                  : undefined;
-              const drift = summary?.drift as { unknownEvents?: unknown } | undefined;
-              return [
-                name,
-                {
-                  availability: section.availability,
-                  revision: section.revision,
-                  bytes: Buffer.byteLength(JSON.stringify(section)),
-                  valueHash: shortHash(value),
-                  ...(Array.isArray(value) ? { entries: value.length } : {}),
-                  ...(section.catalogue ? { catalogueHash: shortHash(section.catalogue) } : {}),
-                  ...(section.error ? { error: true } : {}),
-                  ...(summary
-                    ? {
-                        summary: Object.fromEntries(
-                          Object.entries(summary).map(([key, inner]) => [key, shortHash(inner)]),
-                        ),
-                      }
-                    : {}),
-                  ...(drift ? { unknownEvents: drift.unknownEvents } : {}),
-                },
-              ];
-            }),
-          ),
-        }
-      : {}),
-  };
-}
-
-/** Every discovery answer a page received, timed from the window's start. */
-function discoveryTimeline(requests: SessionRequest[], from: number, to: number) {
-  return requests
-    .filter((request) => request.discovery)
-    .map((request) => ({
-      atMs: request.at - from,
-      inWindow: request.at >= from && request.at < to,
-      wireBytes: request.wireBytes,
-      ...request.discovery,
-    }));
-}
 
 test.describe.configure({ mode: "serial" });
 test.use({ trace: "off" });
@@ -210,64 +116,6 @@ function commandDelta(before: GatewayMetrics, after: GatewayMetrics) {
     };
   }
   return delta;
-}
-
-/** Every session request the page itself sends, with its size on the wire. */
-function recordSessionRequests(page: Page, logicalSessionKey: string): SessionRequest[] {
-  const requests: SessionRequest[] = [];
-  page.on("requestfinished", (request: Request) => {
-    void (async () => {
-      if (!request.url().endsWith("/__orkestrator/invoke")) return;
-      let body: { command?: string; args?: { logicalSessionKey?: string } };
-      try {
-        body = request.postDataJSON() as typeof body;
-      } catch {
-        return;
-      }
-      if (!body.command || body.args?.logicalSessionKey !== logicalSessionKey) return;
-      const at = Date.now();
-      const sizes = await request.sizes();
-      let discovery: Record<string, unknown> | undefined;
-      if (body.command === "get_native_agent_discovery_update") {
-        const response = await request.response();
-        const text = response ? await response.text().catch(() => "") : "";
-        discovery = discoveryShape(text, body.args as { knownToken?: unknown });
-      }
-      requests.push({
-        at,
-        command: body.command,
-        wireBytes:
-          sizes.requestHeadersSize +
-          sizes.requestBodySize +
-          sizes.responseHeadersSize +
-          sizes.responseBodySize,
-        ...(discovery ? { discovery } : {}),
-      });
-    })();
-  });
-  return requests;
-}
-
-function summarize(requests: SessionRequest[], from: number, to: number) {
-  const slice = requests.filter((request) => request.at >= from && request.at < to);
-  const byCommand: Record<string, number> = {};
-  for (const request of slice) byCommand[request.command] = (byCommand[request.command] ?? 0) + 1;
-  // A round has exactly one read of the session's turn state, alone or combined.
-  const rounds = Math.max(
-    0,
-    ...Object.entries(byCommand)
-      .filter(([command]) => !command.includes("discovery"))
-      .map(([, count]) => count),
-  );
-  return {
-    seconds: Math.round((to - from) / 1_000),
-    requests: slice.length,
-    rounds,
-    requestsPerRound: rounds > 0 ? Number((slice.length / rounds).toFixed(2)) : null,
-    requestsPerSecond: Number((slice.length / ((to - from) / 1_000)).toFixed(2)),
-    wireBytes: slice.reduce((total, request) => total + request.wireBytes, 0),
-    byCommand,
-  };
 }
 
 function record(label: string, value: Record<string, unknown>): void {
@@ -331,13 +179,15 @@ async function prepareTab(page: Page) {
       },
     },
   });
-  await openEnvironment(page, status, fixture!, created);
   const identity = {
     environmentId: created.id,
     agent: "claude" as const,
     logicalSessionKey: `env-${created.id}:${TAB_ID}`,
   };
-  return { status, invoke, environment: created, identity, fixture: fixture! };
+  const requests = await openRecordedSession(page, identity.logicalSessionKey, () =>
+    openEnvironment(page, status, fixture!, created),
+  );
+  return { status, invoke, environment: created, identity, fixture: fixture!, requests };
 }
 
 /** Opens the profile's window on one environment, as a person would. */
@@ -411,7 +261,7 @@ test.describe("Requests of a visible running agent tab", () => {
     test.setTimeout(TURN_DEADLINE_MS + 5 * 60_000);
     page.setDefaultTimeout(15_000);
     await page.setViewportSize({ width: 1440, height: 1000 });
-    const { invoke, environment, identity, fixture } = await prepareTab(page);
+    const { invoke, environment, identity, fixture, requests } = await prepareTab(page);
     const other = await invoke<Environment>("create_environment", {
       projectId: fixture.id,
       name: `tab-requests-other-${Date.now()}`,
@@ -420,7 +270,6 @@ test.describe("Requests of a visible running agent tab", () => {
     });
     try {
       await invoke("start_environment", { environmentId: other.id });
-      const requests = recordSessionRequests(page, identity.logicalSessionKey);
       const turn = sumMarker("INACTIVEDONE");
       await send(page, sleepPrompt(25, turn.ask));
       await expect
@@ -438,15 +287,13 @@ test.describe("Requests of a visible running agent tab", () => {
         .toBe("idle");
       await page.waitForTimeout(3_000);
       const returnedAt = Date.now();
-      const whileInactive = summarize(requests, inactiveFrom, returnedAt);
+      const { summary: whileInactive } = await requests.measure(inactiveFrom, returnedAt);
       expect(whileInactive.requests, "an inactive view kept reading its session").toBe(0);
 
       await page.getByText(environment.name, { exact: true }).first().click();
       await expect(page.getByText(turn.marker).first()).toBeVisible({ timeout: 60_000 });
       const caughtUpMs = Date.now() - returnedAt;
-      await expect
-        .poll(() => requests.filter((request) => request.at >= returnedAt).length)
-        .toBeGreaterThan(0);
+      await expect.poll(() => requests.completedSince(returnedAt).length).toBeGreaterThan(0);
       // A reload lands on the workspace with nothing selected.
       await page.reload();
       await page.getByText(environment.name, { exact: true }).first().click({ timeout: 60_000 });
@@ -464,9 +311,8 @@ test.describe("Requests of a visible running agent tab", () => {
     test.setTimeout(TURN_DEADLINE_MS + 5 * 60_000);
     page.setDefaultTimeout(15_000);
     await page.setViewportSize({ width: 1440, height: 1000 });
-    const { status, invoke, environment, identity } = await prepareTab(page);
+    const { status, invoke, environment, identity, requests } = await prepareTab(page);
     try {
-      const requests = recordSessionRequests(page, identity.logicalSessionKey);
       const first = sumMarker("QUIETDONE");
       await send(page, sleepPrompt(SLEEP_SECONDS, first.ask));
       await expect
@@ -482,49 +328,44 @@ test.describe("Requests of a visible running agent tab", () => {
       const after = await readGatewayMetrics(page, status);
       const phaseAtEnd = await turnPhase(invoke, identity);
       expect(phaseAtEnd, "the turn ended inside the measurement window").toBe("running");
-      record("running-quiet", {
-        ...summarize(requests, from, to),
-        gateway: commandDelta(before, after),
-      });
-      record("running-quiet-discovery", { timeline: discoveryTimeline(requests, from, to) });
-      if (SKIP_RECONNECT) return;
+      const { summary, timeline } = await requests.measure(from, to);
+      record("running-quiet", { ...summary, gateway: commandDelta(before, after) });
+      record("running-quiet-discovery", { timeline });
+      await runOptionalReconnect(async () => {
+        await expect(page.getByText(first.marker).first()).toBeVisible({
+          timeout: TURN_DEADLINE_MS,
+        });
+        expect(await turnPhase(invoke, identity)).not.toBe("missing");
 
-      await expect(page.getByText(first.marker).first()).toBeVisible({
-        timeout: TURN_DEADLINE_MS,
-      });
-      expect(await turnPhase(invoke, identity)).not.toBe("missing");
-
-      // The same view through a dropped connection in a second running turn.
-      const stream = watchEventStream(page);
-      const second = sumMarker("OUTAGEDONE");
-      await send(page, sleepPrompt(30, second.ask));
-      await expect
-        .poll(() => turnPhase(invoke, identity), { timeout: 90_000, intervals: [500] })
-        .toBe("running");
-      await page.waitForTimeout(SETTLE_MS);
-      await stream.cut(context);
-      await page.waitForTimeout(6_000);
-      await context.setOffline(false);
-      const backOnlineAt = Date.now();
-      await stream.expectReconnected();
-      await expect
-        .poll(
-          () =>
-            requests.filter((request) => request.at >= backOnlineAt && request.wireBytes > 0)
-              .length,
-          { timeout: 30_000, message: "the view never read its session after the outage" },
-        )
-        .toBeGreaterThan(0);
-      await expect(page.getByText(second.marker).first()).toBeVisible({
-        timeout: TURN_DEADLINE_MS,
-      });
-      record("reconnect", {
-        firstReadAfterOnlineMs: Math.max(
-          0,
-          (requests.find((request) => request.at >= backOnlineAt)?.at ?? backOnlineAt) -
-            backOnlineAt,
-        ),
-        recovered: true,
+        // The same view through a dropped connection in a second running turn.
+        const stream = watchEventStream(page);
+        const second = sumMarker("OUTAGEDONE");
+        await send(page, sleepPrompt(30, second.ask));
+        await expect
+          .poll(() => turnPhase(invoke, identity), { timeout: 90_000, intervals: [500] })
+          .toBe("running");
+        await page.waitForTimeout(SETTLE_MS);
+        await stream.cut(context);
+        await page.waitForTimeout(6_000);
+        await context.setOffline(false);
+        const backOnlineAt = Date.now();
+        await stream.expectReconnected();
+        await expect
+          .poll(
+            () =>
+              requests.completedSince(backOnlineAt).filter((request) => request.wireBytes > 0)
+                .length,
+            { timeout: 30_000, message: "the view never read its session after the outage" },
+          )
+          .toBeGreaterThan(0);
+        await expect(page.getByText(second.marker).first()).toBeVisible({
+          timeout: TURN_DEADLINE_MS,
+        });
+        const firstRead = requests.completedSince(backOnlineAt)[0];
+        record("reconnect", {
+          firstReadAfterOnlineMs: Math.max(0, (firstRead?.at ?? backOnlineAt) - backOnlineAt),
+          recovered: true,
+        });
       });
     } finally {
       await context.setOffline(false);
@@ -543,13 +384,12 @@ test.describe("Requests of a visible running agent tab", () => {
     test.setTimeout(TURN_DEADLINE_MS + 5 * 60_000);
     page.setDefaultTimeout(15_000);
     await page.setViewportSize({ width: 1440, height: 1000 });
-    const { status, invoke, environment, identity, fixture } = await prepareTab(page);
+    const { status, invoke, environment, identity, fixture, requests } = await prepareTab(page);
     const secondContext = await browser.newContext({
       storageState: await page.context().storageState(),
     });
     try {
       await fetchModulesOutsideChromium(secondContext);
-      const first = recordSessionRequests(page, identity.logicalSessionKey);
       const turn = sumMarker("TWOVIEWDONE");
       await send(page, sleepPrompt(TWO_VIEWER_SLEEP_SECONDS, turn.ask));
       await expect
@@ -558,8 +398,9 @@ test.describe("Requests of a visible running agent tab", () => {
       const second = await secondContext.newPage();
       second.setDefaultTimeout(15_000);
       await second.setViewportSize({ width: 1440, height: 1000 });
-      const secondRequests = recordSessionRequests(second, identity.logicalSessionKey);
-      await openEnvironment(second, status, fixture, environment);
+      const secondRequests = await openRecordedSession(second, identity.logicalSessionKey, () =>
+        openEnvironment(second, status, fixture, environment),
+      );
       await expect(second.getByTestId("shared-native-compose-bar")).toBeVisible({
         timeout: 90_000,
       });
@@ -572,15 +413,16 @@ test.describe("Requests of a visible running agent tab", () => {
       const after = await readGatewayMetrics(page, status);
       const phaseAtEnd = await turnPhase(invoke, identity);
       expect(phaseAtEnd, "the turn ended inside the measurement window").toBe("running");
-      const viewers = {
-        first: summarize(first, from, to),
-        second: summarize(secondRequests, from, to),
-      };
+      const [firstWindow, secondWindow] = await Promise.all([
+        requests.measure(from, to),
+        secondRequests.measure(from, to),
+      ]);
+      const viewers = { first: firstWindow.summary, second: secondWindow.summary };
       expect(viewers.second.requests, "the second page never read the session").toBeGreaterThan(0);
       record("running-quiet-two-viewers", { viewers, gateway: commandDelta(before, after) });
       record("running-quiet-two-viewers-discovery", {
-        first: discoveryTimeline(first, from, to),
-        second: discoveryTimeline(secondRequests, from, to),
+        first: firstWindow.timeline,
+        second: secondWindow.timeline,
       });
       await expect(second.getByText(turn.marker).first()).toBeVisible({
         timeout: TURN_DEADLINE_MS,

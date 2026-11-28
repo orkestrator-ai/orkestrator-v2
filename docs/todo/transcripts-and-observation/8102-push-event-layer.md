@@ -431,8 +431,9 @@ Against the expected result
   Its replies averaged 16.8 KB in the one-viewer run and 22.3 KB in the
   two-viewer run. The gateway aggregates leave individual response sizes
   and the number of `unchanged` replies undetermined; the per-answer rerun
-  on mini split each window into one `unchanged` reply and one whole-view
-  snapshot of a real change
+  on mini found one whole-view snapshot of a real change in each window.
+  The one-viewer run and the first viewer in the two-viewer run each also
+  received an `unchanged` reply
   ([Discovery answers in a quiet running Claude tab](#discovery-answers-in-a-quiet-running-claude-tab-2026-11-28)).
 
 **Decisions.**
@@ -583,8 +584,9 @@ answers averaging 16.8 KB with one viewer and 22.3 KB with two, against the
 few hundred bytes 8151 (retired) expected; the gateway's totals could not
 say how many were `unchanged`. Measured per answer on arktech-mini at `a8e5ea708`
 (7568's "8151 (retired) task 2" item, two billed Haiku turns, Claude CLI
-2.1.326, profile with `--no-host-seed --credential-source claude`), every
-window held one `unchanged` answer and one real change:
+2.1.326, profile with `--no-host-seed --credential-source claude`), each
+viewer received one snapshot of a real change. A viewer also received an
+`unchanged` answer when its 30 s backstop fell inside the window.
 
 | 40 s window | Discovery answers | `unchanged` | Snapshots | Bytes |
 | --- | --- | --- | --- | --- |
@@ -599,9 +601,9 @@ Beelink's totals fit the same split exactly: 33,670 = 481 + 33,189 and
   later, inside the window) found the turn's Claude CLI running: `mcp` went
   from no servers to one (48 to 1,004 B) and `runtime` from `detached` to
   `attached` with `runtimeGeneration` 1 (91 to 113 B). The renewal was
-  announced (`discovery-renewal`), so every viewer read once more, 80 ms after
-  the first viewer's own `unchanged` backstop. The second read per viewer is
-  that announcement, not a recovery or reconnect read.
+  announced (`discovery-renewal`), prompting a read about 80 ms after the
+  first viewer's `unchanged` backstop. The snapshot was the first viewer's
+  second in-window answer and the second viewer's only in-window answer.
 - **Why it was 26.7 KB.** A discovery snapshot is the whole view: `commands`
   21,304 B (53 commands), `models` 3,699 B, `mcp` 1,004 B, `runtime` 113 B.
   The 1.1 KB that changed resent 25 KB that had not.
@@ -614,11 +616,12 @@ Beelink's totals fit the same split exactly: 33,670 = 481 + 33,189 and
   quiet minute per viewer. A whole view goes again on each runtime change a
   view shows: a CLI launch, an idle detach, a change in the MCP server set or
   the command catalogue.
-- **Mount bursts cost more than the quiet window.** Before its window the
-  first viewer made 13 discovery reads in 1.1 s, 10 of them snapshots
-  (127,260 B), while the catalogue settled (`loading`, `stale`, then two
-  revisions). The second viewer's mount made 3 identical `initial` snapshots
-  in 100 ms (77,608 B). Every round that is not a background round reads
+- **Mount bursts cost more than the quiet window.** In the one-viewer run,
+  the mount produced 13 discovery answers totalling 127,260 B in 1.1 s.
+  Of those, 10 were snapshots totalling 125,817 B as the catalogue settled
+  (`loading`, `stale`, then two revisions). In the two-viewer run, the
+  second viewer received 3 identical `initial` snapshots totalling 77,127 B
+  in 105 ms. Every round that is not a background round reads
   discovery (`claimExplicit` in `useNativeAgentSession.ts`), and the read is
   not joined with one already in flight, so overlapping mount rounds send
   their reads without the token the first answer would have taught them.

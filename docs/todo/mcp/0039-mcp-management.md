@@ -62,7 +62,7 @@ from the Grok live run's follow-up findings (#2571).
 14. **Claude MCP rows read `unknown` after a refused CLI exits**: on a real browser, rows left `connecting` by a CLI that exited show `unknown` and still offer reconnect. Moved from to-do 1240 (deleted 2026-11-06). Status: done (2026-11-06; credential-free case in `mcp-ui-matrix.spec.ts`).
 15. **Cursor MCP inventory after a bridge restart.** Restore transcript calls as historical observations and require fresh evidence for `connected`. Status: open.
 16. **Unavailable-marker judgement in the MCP apply harness.** Recognize `MCPQ-UNAVAILABLE` at the end of a settled reply with narration. Status: open.
-17. **Grok's shell tool in the MCP apply harness busy check.** Make `hasRunningSleep` recognise Grok's `run_terminal_command` / `kind: execute` call, then optionally rerun Grok's user-scope edit, rename and restore cells (billed, needs the user's approval). Status: open.
+17. **Grok's shell tool in the MCP apply harness busy check.** Make `hasRunningSleep` recognise the projected `toolName` values `run_terminal_command` and `run_terminal_cmd`, then optionally rerun Grok's user-scope edit, rename and restore cells (billed, needs the user's approval). Status: open.
 18. **Untrusted Grok project rows shown as `effective`.** The management snapshot lists servers from a project file Grok will not load (no folder-trust decision, project resources off) as `effective`. Status: open.
 
 ### 1. Replaced Claude server processes linger (code item 8)
@@ -570,7 +570,9 @@ apply from its run.
 - Cursor (SDK 1.4.1) went `pending-next-turn` → `applied` in both scopes on
   a real login the same day and passed 14 of 15 probes. The one failure, tab
   B's user removal, reached no server with its nonce and was rejected by the
-  harness's exact-match reply rule (task 16), not by apply
+  harness's exact-match reply rule (task 16). The panel can omit a server
+  when the SDK advertises only a generic `mcp` tool, so post-removal tool
+  availability on tab B remains inconclusive
   ([real-login record](#live-apply-record-cursor-and-pi-on-real-logins-2026-11-26)).
 - Grok 1.0.88 went `restart-required` → `applied` in both scopes on a real
   login the same day. The project scope passed on runtime evidence; every
@@ -582,12 +584,12 @@ apply from its run.
 
 - **Which providers keep apply on?**
   - **Keep all-on for all six providers: Claude, Codex, OpenCode, Cursor, Pi and Grok (recommended, chosen).**
-    - Pros: matches every live result (each save reported the apply
-      outcome its provider's strategy promises, and every failure traced to
-      the harness); no code change; users keep runtime feedback on every
-      platform.
+    - Pros: the saves reported the expected apply outcomes for their
+      providers, and the successful probes support keeping apply on. Users
+      keep runtime feedback on every platform without a code change.
     - Cons: Grok's user-scope edit, rename-to-v2 and restore cells are
-      still unproven live until task 17 lets the busy check run; Cursor's
+      still unproven live until task 17 lets the busy check run. Cursor's
+      post-removal tool availability on tab B is inconclusive, and its
       inventory after a restart can show a stale `connected` row (task 15).
   - **Narrow Grok to write-only, keep the rest on.**
     - Pros: claims nothing for Grok's unproven user-scope cells.
@@ -597,9 +599,10 @@ apply from its run.
       in apply. Rejected.
   - **Narrow Cursor (and Grok) to write-only.**
     - Pros: the most conservative release.
-    - Cons: Cursor applied in both scopes with 14 of 15 probes passing and
-      the one failure a harness judgement; narrowing it for that would be
-      unsupported by the evidence. Rejected.
+    - Cons: Cursor reported apply in both scopes and 14 of 15 probes passed.
+      Write-only would remove runtime feedback across both scopes, while
+      the remaining uncertainty concerns one tab's post-removal tool
+      availability. Rejected.
 
 **Outcome (2026-11-28).** The user chose to keep apply on for every
 provider. `DEFAULT_MCP_MANAGEMENT_ROLLOUT` stays as it is; the 7568 item is
@@ -909,22 +912,25 @@ tool is `run_terminal_command` (`run_terminal_cmd` in some builds), which the
 ACP bridge already classifies as a command: `SHELL_TOOL_NAMES` in
 `bridges/acp-bridge/src/acp-tool-classification.ts` lists both names, and
 `PERMISSION_KIND_BY_TOOL` in `bridges/acp-bridge/src/acp-session.ts` maps
-them to the ACP `kind: execute`. The rest of the check (pending state, this
-run's marker, `sleep 45`, not backgrounded) applies unchanged. The
-existing case in `mcp-apply-live-support.test.ts` ("busy setup requires
-this run's pending foreground shell command") covers only `bash`.
+them to the ACP `kind: execute`. The spec passes projected messages to
+`hasRunningSleep`. `renderAcpToolSource` in `bridges/acp-bridge/src/acp-tools.ts`
+puts the call name in `toolName` and uses the ACP kind as the fallback value
+for unnamed calls. The matcher already accepts that fallback as
+`toolName: "execute"`. The existing case in `mcp-apply-live-support.test.ts`
+("busy setup requires this run's pending foreground shell command") covers
+only `bash`.
 
 **Decisions.**
 
 - **How should the busy check recognise Grok's shell tool?**
-  - **Add Grok's names and the `execute` kind to the harness's own match (recommended).** Accept `run_terminal_command`, `run_terminal_cmd` and the other names in the ACP bridge's list, and a part whose tool kind is `execute`. Add the Grok part shape to the existing test, with the same negative cases (settled state, another marker, no `sleep 45`, backgrounded).
+  - **Match Grok's projected tool names in the harness (recommended).** Add `run_terminal_command` and `run_terminal_cmd` to the match. Extend the focused test with pending parts in the ACP-to-transcript shape whose `toolName` is `run_terminal_command`, `run_terminal_cmd` or the existing `execute` fallback. Retain the negative cases for settled state, another marker, missing `sleep 45` and backgrounded calls.
     - Pros: a small, fixture-tested change; the harness stays independent of bridge internals.
     - Cons: the harness keeps a second copy of the shell-name list, which can drift when a provider renames its tool.
   - **Import `SHELL_TOOL_NAMES` from the ACP bridge.**
     - Pros: one list for Grok's names.
     - Cons: ties an e2e helper to a bridge's source layout; the list covers ACP agents only, so the harness still needs its own names for Claude, Codex, OpenCode, Cursor and Pi.
 - **Should Grok's user-scope cells be rerun live after the fix?**
-  - **Rerun only the Grok user scope once the fix lands, with the user's approval (recommended).** About 17 billed turns on a current Grok login, as in the 2026-11-26 run; the open 7568 Grok item is where the user approves and records it.
+  - **Rerun only the Grok user scope once the fix lands, with the user's approval (recommended).** Use `ORKESTRATOR_AGENT_TEST_MCP_SCOPES=backend-user` with a current Grok login. The previous two-scope run used 17 billed turns. The open 7568 Grok item is where the user approves and records the rerun.
     - Pros: proves the edit, rename-to-v2 and restore cells on a real model, the only cells of the matrix still unproven for Grok.
     - Cons: billed turns and a Grok login that expires within a day.
   - **Accept the fixture test alone.**
@@ -933,9 +939,12 @@ this run's pending foreground shell command") covers only `bash`.
 
 ### 18. Untrusted Grok project rows shown as `effective`
 
-**Problem.** The MCP management snapshot lists a Grok project server that
-Grok does not start as `effective`, so the editor says a server is live
-when no Grok session in that environment loads it.
+**Problem.** The saved-configuration catalog can mark a Grok project
+definition `effective` (shown as **In use**) and choose it over another
+definition with the same name even when the session's folder policy makes
+Grok skip that source. The catalog reports which saved definition wins
+under its configuration and policy rules. The live session inventory
+reports which servers the session sees.
 
 **Context.** In the [Grok live record](#live-apply-record-grok-2026-11-26)
 ("Untrusted project"), a project `.grok/config.toml` server
@@ -952,12 +961,12 @@ the verdict of `grokFolderTrust`
 (`apps/backend/src/core/mcp-management/native-policy.ts`) when project
 resources are off. With no decision in `trusted_folders.toml` that verdict
 is `unknown`, and `trustFields` sets `excludedReason` only for `excluded`
-(an explicit decline). `catalog.ts` reports `policy-excluded` only from
-`excludedReason`, so an `unknown` source's rows fall through to `effective`;
-the source header shows the trust reason in amber
-(`McpSourceList.tsx`), but the row status contradicts it. The same holds for
-Grok's in-project compatibility sources (the project `.mcp.json` and
-Claude's private entry), whose `compat` helper also excludes only on
+(an explicit decline). `catalog.ts` reports `policy-excluded` from
+`excludedReason`. Without it, a valid, enabled row from an `unknown`
+source can win precedence and appear as `effective` in the catalog while
+the source header shows the trust reason in amber (`McpSourceList.tsx`).
+The same holds for Grok's in-project compatibility sources (the project
+`.mcp.json` and Claude's private entry), whose `compat` helper excludes only on
 `excluded`. `grokFolderTrust`'s own comment notes that an interactive Grok
 may still ask about a repository with no decision, so `unknown` is not the
 same as declined for a Grok terminal.
@@ -965,15 +974,15 @@ same as declined for a Grok terminal.
 **Decisions.**
 
 - **How should the snapshot report a Grok project server in a folder with no trust decision?**
-  - **Report it as `policy-excluded`, with a reason that Grok sessions here do not start it until the repository is trusted or project resources are turned on (recommended).** Apply to the project source and the in-project compatibility sources, with service tests for `unknown`, `excluded` and `allowed`.
-    - Pros: matches the live session and `grok mcp doctor`; reuses an existing status, so no contract change and no new renderer label; the catalogue already leaves an excluded source out when it picks each name's winning definition (`isCandidate`), so a user-scope server of the same name is reported as the one Grok loads.
-    - Cons: understates a Grok terminal, where an interactive prompt can still grant trust and load the server; the reason has to say so.
+  - **Report the definition as `policy-excluded` under the current session policy, with a reason explaining how trust or enabling project resources changes its eligibility (recommended).** Apply to the project source and the in-project compatibility sources, with service tests for `unknown`, `excluded` and `allowed`.
+    - Pros: aligns the catalog's eligibility rules with the observed session policy and `grok mcp doctor`. The existing status works with current renderers. `isCandidate` already leaves excluded sources out of precedence, so an otherwise eligible user-scope definition of the same name can win.
+    - Cons: an interactive Grok terminal can prompt the user to grant trust. The reason needs to explain when the definition can become eligible.
   - **Keep `effective` and add a status reason pointing at folder trust.**
-    - Pros: the smallest change; no apply behaviour moves.
-    - Cons: the status still claims a running server; the badge and the session keep disagreeing.
+    - Pros: surfaces the trust reason on the row with a small change and preserves the current precedence rules.
+    - Cons: the project definition can still appear as the catalog winner and shadow an eligible same-name user definition while the session skips the project source.
   - **Add a new status such as `trust-pending`.**
-    - Pros: says exactly what is happening.
-    - Cons: a protocol contract change; older renderers cannot label it; more work for one provider's case.
+    - Pros: distinguishes a missing trust decision from an explicit decline in the catalog.
+    - Cons: requires a protocol change and renderer support, plus a rule for whether pending definitions participate in precedence.
 
 ## Current state
 
@@ -1583,8 +1592,10 @@ signed in to Grok on the host (the host login was valid until
 2026-11-27T01:28Z). Grok Build 1.0.88 is the pinned toolchain the profile
 ran; the host CLI is 1.0.92. Profile `grok-mcp-live-4`, from `main` at
 `76cd71b58`, for the 7568 item's live apply spec with
-`ORKESTRATOR_AGENT_TEST_MCP_PROVIDERS=grok`. The exact commands and the
-profile's clean-up were not relayed to this record.
+`ORKESTRATOR_AGENT_TEST_MCP_PROVIDERS=grok`. The original checklist directed
+the runner to cover both writable scopes, check the saved `enabled` and SSE
+capabilities, then test the untrusted project gate in the same profile.
+The exact commands and the profile's clean-up were not relayed to this record.
 
 **Result:** 1 failed (exit 1) in 256 s, with 9 failures, every one traced to
 one of two harness gaps (below), none to apply. Record:

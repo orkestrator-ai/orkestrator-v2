@@ -18,7 +18,7 @@ with openbox, once the user had installed a disposable display there).
 
 ### Tasks
 
-1. **A headless mode for agent-test Electron**: an agent run of `dev:test` on a Linux desktop puts a window on the user's live session. Status: open. The Linux real-display run of the whole Electron suite was done on beelink on 2026-11-28 under Xvfb with openbox: 81 passed, 6 skipped, 1 failed. A covered window paused its polls there too, so the covered-window decision in 7568 is not needed for Linux. What is left is `terminal-input-resume-electron.spec.ts`, which fails on any 1280x800 screen; how to handle it is a coordinator choice (Assumptions and decisions, 2026-11-28). Implementation done 2026-11-03; macOS qualified 2026-11-06; Linux re-checked on current `main` and the CI real-display run repaired 2026-11-11; the Windows check moved to [7568](../manual-test/7568-manual-test-checklist.md) on 2026-11-10; the macOS real-display run of the whole suite done on `mbp3` on 2026-11-15 (hidden, minimised and covered windows all pause there; one spec defect fixed, the rest filed by 8300 (retired 2026-11-17) as flakes 9938 to 9942 and 9949 and a named focus-loss failure).
+1. **A headless mode for agent-test Electron**: an agent run of `dev:test` on a Linux desktop puts a window on the user's live session. Status: open. The Linux real-display run of the whole Electron suite was done on beelink on 2026-11-28 under Xvfb with openbox: 81 passed, 6 skipped, 1 failed. A covered window paused its polls under Xvfb with openbox. The decision in 7568 remains conditional on a covered window reporting `visible` in the Windows run or the first scheduled CI runs under Xvfb without a window manager. On beelink, `terminal-input-resume-electron.spec.ts` failed at 1280x800 under Xvfb with and without openbox, and passed at 1920x1200 with openbox. How to handle that failure is a coordinator choice (Assumptions and decisions, 2026-11-28). Implementation done 2026-11-03; macOS qualified 2026-11-06; Linux re-checked on current `main` and the CI real-display run repaired 2026-11-11; the Windows check moved to [7568](../manual-test/7568-manual-test-checklist.md) on 2026-11-10; the macOS real-display run of the whole suite done on `mbp3` on 2026-11-15 (hidden, minimised and covered windows all pause there; one spec defect fixed, the rest filed by 8300 (retired 2026-11-17) as flakes 9938 to 9942 and 9949 and a named focus-loss failure).
 2. **Home terminal on a host without systemd OSC context**: qualify the repaired exact-line assertion outside beelink. Moved from 4741 (deleted 2026-11-06). Status: done (2026-11-06, passed on macOS).
 3. **Audit other terminal snapshot line comparisons**: check for the same OSC-sensitive assertion elsewhere. Moved from 4741 (deleted 2026-11-06). Status: done (2026-11-06; every whole-line comparison already used visible text, so no spec changed).
 4. **Keep agent-test Electron off the macOS desktop**: on macOS `--headless` changed nothing, so every agent's profile opened a window (and a detached DevTools window) on the user's desktop. Status: done (2026-11-13: the browser smoke and the native-dialog checks passed on macOS with the window kept hidden; implementation done 2026-11-06; the checks that need a person watching the Mac's screen are in [7568](../manual-test/7568-manual-test-checklist.md) since 2026-11-11).
@@ -83,8 +83,9 @@ openbox) and keeps it, and the whole suite ran there under Xvfb with openbox
 `window-visibility-polls-electron.spec.ts` gave the same answer as the
 2026-11-13 container run and as macOS: hidden, minimised and covered windows
 all reported `hidden` and read nothing. Only one case failed:
-`terminal-input-resume-electron.spec.ts`. It fails on a 1280x800 screen with
-or without a window manager, and passes on 1920x1200.
+`terminal-input-resume-electron.spec.ts` timed out at the native resize.
+On beelink it failed again at 1280x800 under Xvfb with openbox and without a
+window manager, and passed at 1920x1200 with openbox.
 
 **Decisions.**
 
@@ -208,25 +209,27 @@ and the attachments.
 
 ### Task 1: the terminal resume case on a 1280x800 screen (2026-11-28)
 
-`terminal-input-resume-electron.spec.ts` fails at its native-resize step on
-any screen smaller than the 1400x900 main window (Current state). Nothing
-was changed, because the brief said to fix nothing and leave the choice to
-the coordinator. The options:
+On beelink, `terminal-input-resume-electron.spec.ts` timed out at its native
+resize on a 1280x800 Xvfb screen with openbox and without a window manager.
+It passed at 1920x1200 with openbox. The 1400x900 window's fit within the
+display is a possible cause. The recorded runs leave the cause and minimum
+working size unverified (Current state). The coordinator owns the choice.
 
-- **Make the spec independent of screen size.** Size the window to fit the
-  display's work area before the resize, as it already does under headless
-  Ozone (recommended).
-  - Pros: the case passes on any display, including CI's default
-    `xvfb-run` screen.
-  - Cons: a spec change, and it needs a run on a small screen and on macOS
-    to prove it.
-- **Document a minimum screen and pass `-s "-screen 0 1920x1200x24"`.**
+- **Fit the starting window to the display's work area (recommended).**
+  Use Electron's `screen.getPrimaryDisplay().workAreaSize` to size the window
+  before the resize. The existing headless Ozone setup sets a fixed 1280x860,
+  which exceeds the height of a 1280x800 screen.
+  - Pros: could give the resize room to change the terminal layout without
+    requiring callers to configure a larger Xvfb screen.
+  - Cons: needs a spec change and verification on the failing 1280x800
+    setup, scheduled CI and macOS.
+- **Document the passing Xvfb configuration and pass `-s "-screen 0 1920x1200x24"`.**
   Apply it in agent-testing.md's command and in `electron-qualification.yml`.
   - Pros: no spec change.
   - Cons: every caller has to remember it, and CI's workflow changes.
 - **Record it as environmental.**
   - Pros: nothing to change.
-  - Cons: the suite stays red on a 1280x800 display.
+  - Cons: the observed 1280x800 Xvfb failure remains unresolved.
 
 ### Task 1: showing the desktop case's windows on mbp3 (2026-11-15)
 
@@ -1002,9 +1005,11 @@ without restarting the PTY` (`terminal-input-resume-electron.spec.ts:108`)
 failed at line 339: `expect.poll(resizes).toBeGreaterThan(resizesBefore)`
 timed out after 30 s with `Expected: > 2, Received: 2`. After the native
 `setSize(width - 240, height - 80)`, the main process sent no
-`local_terminal_resize`. Everything before that step passed: the lost
-keystroke, the toast and its buttons, and the fenced `X`. The failure is not
-a flake, and it is not caused by the window manager:
+`local_terminal_resize`. The `X` write reached the editor and its response
+was lost. The spec confirmed that `X` was visible in the editor and that the
+recovery toast showed both buttons. The resize timeout came before the
+assertions that a subsequent `Y` write was fenced and that Resume cleared the toast. The
+timeout reproduced at 1280x800 with openbox and with no window manager.
 
 | Run of the file alone | Result |
 | --- | --- |
@@ -1012,15 +1017,21 @@ a flake, and it is not caused by the window manager:
 | 1280x800, no window manager | Failed at line 339 |
 | 1920x1200, openbox | Passed (39 s) |
 
-The main window is created at 1400x900 (`apps/desktop/electron/window.ts`),
-which is larger than a 1280x800 screen. Every failure screenshot is
-1600x1142, so the page was larger than the screen. The spec resizes to
-1280x860 only under headless Ozone, never on a real display. So the case
-needs a screen larger than the main window. It is the only Linux-only
-finding of the run. No flake case covers it: 1320, 9937 and 0470 cover other
-steps of the same case. CI's `electron-qualification.yml` runs `xvfb-run -a`
-with its default screen, which is smaller still, so its first runs may fail
-this case the same way. That is an inference; it has not been observed.
+The full run and the two isolated openbox failures each captured screenshots
+at 1600x1142 and 1280x776. The run without a window manager captured 1600x1142
+and 1600x1200.
+
+The main window requests 1400x900 at creation
+(`apps/desktop/electron/window.ts`). That size exceeds the failing Xvfb
+screen, so display constraints could explain why shrinking the native window
+produced no terminal resize. The run did not record native window bounds
+before and after `setSize`. The spec sets a fixed 1280x860 only under headless
+Ozone. Flake cases 1320, 9937 and 0470 cover other steps of the same case.
+
+The scheduled `electron-qualification.yml` workflow invokes `xvfb-run -a`
+with no explicit screen size. Whether it reproduces the resize timeout is
+open. Record the effective Xvfb dimensions from the first observed CI run
+before comparing it with beelink.
 
 **`window-visibility-polls-electron.spec.ts`**, its `desktop-window-polls`
 attachment (400 ms poll, 2 s windows), in the whole suite and in a run of the
@@ -1040,8 +1051,11 @@ spec alone just before it (2 passed, 1 skipped, 27.7 s):
 No read happened while the window was hidden, in either run
 (`hiddenReads: 0`). So under Xvfb with openbox on the fleet's display host,
 as in the 2026-11-13 container and on macOS, a hidden, a minimised and a
-covered window all pause their polls. The covered-window decision in 7568 is
-therefore not needed for Linux. The never-shown-window case agreed:
+covered window all paused their polls. The beelink run did not trigger
+the covered-window decision in 7568. That decision remains conditional on
+a covered window reporting `visible` in the Windows run or the first
+scheduled CI runs under Xvfb without a window manager. The never-shown-window
+case reported:
 `hidden` with 0 reads; `visible` with throttling off, first read after
 158 ms and 10 reads; `hidden` with 0 reads once throttling was back on.
 
@@ -1050,9 +1064,9 @@ therefore not needed for Linux. The never-shown-window case agreed:
 - The Electron specs under a real display on Linux ran in full on beelink on
   2026-11-28 under Xvfb with openbox (Current state, "Real-display run on
   beelink"). One case still needs a passing whole-suite run:
-  `terminal-input-resume-electron.spec.ts`, once its 1280x800 failure has
-  been handled (Assumptions and decisions, 2026-11-28). On macOS the whole
-  suite ran on `mbp3` on 2026-11-15 (Current state).
+  `terminal-input-resume-electron.spec.ts`, once the observed 1280x800 Xvfb
+  failure has been handled (Assumptions and decisions, 2026-11-28). On macOS
+  the whole suite ran on `mbp3` on 2026-11-15 (Current state).
   The design canvas spec is intermittent on beelink (flake
   [4250](../../tests/flaky-tests/design-canvas-and-artifacts/4250-design-electron-reachability-dialog-race.md)),
   with and without this change. CI's native-menu job covers three of them under
@@ -1067,8 +1081,10 @@ therefore not needed for Linux. The never-shown-window case agreed:
   (the never-shown and lock-screen cases on `arktech-mini`, 2026-11-13; the
   desktop case on `mbp3`, 2026-11-15, where all three paused) and, on
   2026-11-13, under Xvfb with openbox in a throwaway container, where all
-  three paused too. Still open: a window manager other than openbox, and
-  Windows (7568).
+  three paused too. Coverage remains open for other Linux window managers,
+  Windows and the scheduled CI job's Xvfb without a window manager. The
+  decision in 7568 waits for a covered window to report `visible` in the
+  Windows run or the first scheduled CI runs.
 
 ## Related
 

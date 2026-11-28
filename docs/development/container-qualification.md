@@ -797,17 +797,24 @@ This run rechecked it with fake models only: no login, no billed turn.
   expected "Claude Code is not logged in" notice of a credential-free profile.
 - **Signals:** both container signals `confirmed` before any test (one
   container each, one ring each, `fallback` 0, no demotion).
-- **Fake-model spec:** `ORKESTRATOR_AGENT_TEST_FAKE_CLAUDE_API=1 mise run
-  test:agent:docker -- container-claude-terminal-signal.spec.ts --workers=1`
-  through `test:logged`: exit 0, 1 passed, 0 skipped, 17.1 s. Enter to the
+- **Fake-model spec:** to replay against the profile above, run:
+
+  ```bash
+  ORKESTRATOR_AGENT_TEST_PROFILE=fw-1031-beelink \
+    ORKESTRATOR_AGENT_TEST_FAKE_CLAUDE_API=1 \
+    mise run test:logged -- --name fw-1031-beelink -- \
+    mise run test:agent:docker -- container-claude-terminal-signal.spec.ts --workers=1
+  ```
+
+  Recorded result: exit 0, 1 passed, 0 skipped, 17.1 s. Enter to the
   sidebar showing working 292 ms (foreground) and 216 ms (background); Stop
   hook to the sidebar showing waiting 301 and 223 ms. Claude signal rings
   1 → 5, `confirmed` throughout, `fallback` 0.
 - **Not run:** `close-retention-live.spec.ts` has no fake-model part (every
   case is a real provider turn), so it was not run. The signed-in runs of
   1031 (retired) task 9 stay open in the
-  [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md):
-  they are billed and need the user's approval.
+  [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md#agent-engines-and-provider-sdks):
+  the heavy batch needs the user's approval.
 - **Cleanup:** `dev:stop`, then `dev:reset` removed the profile's two
   containers, two volumes and one network; the on-demand check had already
   removed its own probe network. The workspace image the profile built

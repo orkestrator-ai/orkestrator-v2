@@ -201,20 +201,20 @@ evidence. This file only points at it.
 
 The user's answer to task 7 (2026-11-28):
 
-- **mini** is the host for test runs that use provider logins.
+- **mini** is the default host for test runs that use provider logins.
 - Keep such runs few and cheap.
 - **Ask the user's permission before any heavy testing or any testing with
-  many paid calls.** A billed batch needs the user's approval before it
-  starts.
+  many paid calls.**
 
 Run owners:
 
 | Batch | Runs on | Run by |
 | --- | --- | --- |
-| Provider-login (billed) runs | mini by default, after the user approves the batch | the coordinator's agents |
-| Other batches (credential-free, Linux, Docker) | mini by default, or the host the item names | the coordinator's agents |
+| Provider-login runs | mini by default, with the required logins verified. The [1031 firewall-specific batch](../manual-test/7568-manual-test-checklist.md#agent-engines-and-provider-sdks) uses beelink, with verified logins and the user's approval for the heavy batch. | the coordinator's agents |
+| Native Linux batches | A Linux host that meets the item's requirements, including its distro and security policy when specified | the coordinator's agents |
+| Other credential-free and Docker batches | The host the item names, or mini when it meets the run's requirements | the coordinator's agents |
 | macOS display batches (a real Electron window, Docker Desktop, Safari) | mbp3, as before | the coordinator's agents |
-| iOS and two-machine batches | not decided separately: under the default, mini (iOS needs macOS with Xcode; a two-machine run needs a second node) | the coordinator's agents |
+| iOS and two-machine batches | mini when it meets the requirements (iOS needs macOS with Xcode and the simulator runtime when applicable, and a two-machine run needs a second node) | the coordinator's agents |
 
 Which hosts hold which provider logins, from the recorded runs (availability
 only; a login can lapse after the date shown). "Not verified" means no
@@ -234,8 +234,8 @@ the login ([credentials-and-models.md](../../development/credentials-and-models.
 | Grok | mbp3 | isolated snapshot of the host Grok login | valid on 2026-11-26, signed in by the user that day; the login ran until 2026-11-27T01:28Z ([0039 record](../mcp/0039-mcp-management.md#live-apply-record-grok-2026-11-26)) |
 | Cursor, Pi, Grok | beelink, omarchy-hp, mini | as above | not verified |
 
-Every row for mini is "not verified", so the first approved billed batch
-there should start with a cheap signed-in check per provider it needs.
+Every row for mini is "not verified", so start with a cheap signed-in check
+per provider the batch needs.
 
 ## Outstanding work
 
@@ -358,13 +358,16 @@ Platform runs, and the todo files with items for each. The runs themselves
 are items in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md),
 each naming its source to-do and task; the source to-do holds what to assert.
 
-Run owners (the user's answer to task 7, 2026-11-28; details under
-[Provider logins and run owners](#provider-logins-and-run-owners-2026-11-28)):
-the coordinator's agents run the batches, on mini by default, and the macOS
-display batches on mbp3 as before. A provider (billed) batch needs the user's
-approval before it starts, and is kept few and cheap.
 Links checked 2026-11-13: every linked file exists, and retired to-dos are
 cited as `NNNN (retired)`.
+
+The coordinator's agents run batches on mini when it meets the run's
+requirements. Native Linux checks use a qualifying Linux host, macOS display
+checks use mbp3, and the
+[1031 firewall-specific batch](../manual-test/7568-manual-test-checklist.md#agent-engines-and-provider-sdks)
+uses beelink. Keep provider-login runs few and cheap, and get the user's
+approval before heavy testing or testing with many paid calls. See
+[Provider logins and run owners](#provider-logins-and-run-owners-2026-11-28).
 
 | Run | Items in |
 | --- | --- |
@@ -862,18 +865,23 @@ checklist's decisions section.
 Answered by the user on 2026-11-28, from the manual-test checklist's
 decisions section (0031 task 7).
 
-- **Which host runs provider-login tests.** Options: (a) one host for all of
-  them (pros: one place to keep logins fresh, one place to look; cons: a
+- **Which host runs provider-login tests.** Options: (a) one default host
+  (pros: one place to keep logins fresh, one place to look; cons: a
   provider whose login lives elsewhere waits for a sign-in there); (b) each
   run on whichever host holds that login (pros: no sign-in needed; cons:
   logins scattered over four hosts, each lapsing on its own). The user chose
-  (a), with **mini** as the host.
+  (a), with **mini** as the default. The
+  [1031 firewall-specific batch](../manual-test/7568-manual-test-checklist.md#agent-engines-and-provider-sdks)
+  is an exception. Use **beelink**, where Docker reached the agent-tools
+  port on 2026-11-28, after verifying the required logins and getting the
+  user's approval for the heavy batch.
 - **Cost.** Keep provider-login runs few and cheap, and ask the user before
-  any heavy testing or testing with many paid calls. A billed batch is
-  approved by the user before it starts.
+  any heavy testing or testing with many paid calls.
 - **Run owners.** The coordinator's agents run the batches on mini by
-  default; the macOS display batches stay on mbp3. iOS and two-machine
-  batches were not named separately, so they follow the default.
+  default when it meets the run's requirements. Native Linux batches
+  use a qualifying Linux host and the macOS display batches stay on mbp3.
+  iOS and two-machine batches follow the default when their requirements
+  are met.
 - **The login table.** Built from recorded runs only and the coordinator's
   report of 2026-11-28; anything without a run is "not verified" rather than
   assumed. Task 7 is done.

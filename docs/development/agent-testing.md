@@ -1890,6 +1890,16 @@ env -u WAYLAND_DISPLAY -u ELECTRON_OZONE_PLATFORM_HINT \
   xvfb-run -a mise run test:agent:electron
 ```
 
+beelink is the fleet's Linux display host for these specs. The user
+installed Xvfb, xauth, xdotool and openbox there on 2026-11-28 and keeps
+them. Its whole-suite run under Xvfb with openbox, and the extra variables
+an agent shell on its Hyprland session clears, are recorded in to-do
+[2181](../todo/cross-cutting/2181-dev-test-electron-opens-on-the-linux-desktop.md)
+("Real-display run on beelink"). On beelink,
+`terminal-input-resume-electron.spec.ts` timed out at its native resize on
+1280x800 Xvfb both with openbox and without a window manager. It passed at
+1920x1200 with openbox.
+
 With neither `DISPLAY` nor `WAYLAND_DISPLAY` the run stops before its first
 launch and says this (`electron-display-setup.ts`), rather than letting every
 spec report a launch timeout. The Wayland rendering case in

@@ -12,11 +12,13 @@ task 1 when 5460 was retired; the same day's review repairs moved its
 covered-window decision to 7568), and on 2026-11-15 against `main` at
 `47110af03` (task 1's real-display run of the whole Electron suite on the
 MacBook Pro `mbp3`, at the user's request; the suite itself ran at
-`a8b89f154`).
+`a8b89f154`), and on 2026-11-28 against `main` at `a8e5ea708` (task 1's
+Linux real-display run of the whole Electron suite on beelink, under Xvfb
+with openbox, once the user had installed a disposable display there).
 
 ### Tasks
 
-1. **A headless mode for agent-test Electron**: an agent run of `dev:test` on a Linux desktop puts a window on the user's live session. Status: blocked (Linux only: waits on 7568 for a Linux real-display run of the whole Electron suite, from whichever comes first of the scheduled CI job's first runs (0031 task 8) and a fleet display host (7568: 2181 task 1 Linux display host); its `desktop-window-polls` attachment says whether a covered Linux window pauses, and only if it stays `visible` is the covered-window decision in 7568 needed). Implementation done 2026-11-03; macOS qualified 2026-11-06; Linux re-checked on current `main` and the CI real-display run repaired 2026-11-11; the Windows check moved to [7568](../manual-test/7568-manual-test-checklist.md) on 2026-11-10; the macOS real-display run of the whole suite done on `mbp3` on 2026-11-15 (hidden, minimised and covered windows all pause there; one spec defect fixed, the rest filed by 8300 (retired 2026-11-17) as flakes 9938 to 9942 and 9949 and a named focus-loss failure).
+1. **A headless mode for agent-test Electron**: an agent run of `dev:test` on a Linux desktop puts a window on the user's live session. Status: open. The Linux real-display run of the whole Electron suite was done on beelink on 2026-11-28 under Xvfb with openbox: 81 passed, 6 skipped, 1 failed. A covered window paused its polls under Xvfb with openbox. The decision in 7568 remains conditional on a covered window reporting `visible` in the Windows run or the first scheduled CI runs under Xvfb without a window manager. On beelink, `terminal-input-resume-electron.spec.ts` failed at 1280x800 under Xvfb with and without openbox, and passed at 1920x1200 with openbox. How to handle that failure is a coordinator choice (Assumptions and decisions, 2026-11-28). Implementation done 2026-11-03; macOS qualified 2026-11-06; Linux re-checked on current `main` and the CI real-display run repaired 2026-11-11; the Windows check moved to [7568](../manual-test/7568-manual-test-checklist.md) on 2026-11-10; the macOS real-display run of the whole suite done on `mbp3` on 2026-11-15 (hidden, minimised and covered windows all pause there; one spec defect fixed, the rest filed by 8300 (retired 2026-11-17) as flakes 9938 to 9942 and 9949 and a named focus-loss failure).
 2. **Home terminal on a host without systemd OSC context**: qualify the repaired exact-line assertion outside beelink. Moved from 4741 (deleted 2026-11-06). Status: done (2026-11-06, passed on macOS).
 3. **Audit other terminal snapshot line comparisons**: check for the same OSC-sensitive assertion elsewhere. Moved from 4741 (deleted 2026-11-06). Status: done (2026-11-06; every whole-line comparison already used visible text, so no spec changed).
 4. **Keep agent-test Electron off the macOS desktop**: on macOS `--headless` changed nothing, so every agent's profile opened a window (and a detached DevTools window) on the user's desktop. Status: done (2026-11-13: the browser smoke and the native-dialog checks passed on macOS with the window kept hidden; implementation done 2026-11-06; the checks that need a person watching the Mac's screen are in [7568](../manual-test/7568-manual-test-checklist.md) since 2026-11-11).
@@ -73,6 +75,17 @@ on can come from that job's first runs, read in 7568 under 0031 task 8, as
 well as from the fleet display host (7568: 2181 task 1 Linux display host). That job's Xvfb has no window
 manager, so its desktop case cannot minimise the window (the spec records
 `not-minimised`), but it still records the covered state.
+
+On 2026-11-28 the fleet display host came first. The user installed a
+disposable display on beelink (Xvfb, xauth, xdotool, ImageMagick and
+openbox) and keeps it, and the whole suite ran there under Xvfb with openbox
+(Current state, "Real-display run on beelink"). The desktop case of
+`window-visibility-polls-electron.spec.ts` gave the same answer as the
+2026-11-13 container run and as macOS: hidden, minimised and covered windows
+all reported `hidden` and read nothing. Only one case failed:
+`terminal-input-resume-electron.spec.ts` timed out at the native resize.
+On beelink it failed again at 1280x800 under Xvfb with openbox and without a
+window manager, and passed at 1920x1200 with openbox.
 
 **Decisions.**
 
@@ -176,6 +189,47 @@ Mac.
     - Cons: the reported problem stays.
 
 ## Assumptions and decisions
+
+### Task 1: the Linux run on beelink, and its display (2026-11-28)
+
+The run followed agent-testing.md's command and added three things. A
+1280x800x24 screen, as the coordinator's brief asked. openbox, so that the
+desktop case could minimise its window. And `dbus-run-session`, because an
+agent shell on the signed-in Hyprland session inherits the desktop's session
+bus, and a notification or portal request sent there would appear on the
+real desktop. `DISPLAY`, `XDG_SESSION_TYPE` and `HYPRLAND_INSTANCE_SIGNATURE`
+were cleared along with the two Wayland variables, so the only display
+named in the run's environment was the one `xvfb-run` created.
+`ORKESTRATOR_NATIVE_MENU_INPUT=1` was set, as in CI, because the Xvfb
+display was isolated. The failure artifacts that `test:logged` wrote to an
+`orkestrator-test-run.*` directory were not read; the brief put those
+directories off limits. The evidence came from the run's
+`output/agent-testing/<run>/electron/results.json`, the failure screenshots
+and the attachments.
+
+### Task 1: the terminal resume case on a 1280x800 screen (2026-11-28)
+
+On beelink, `terminal-input-resume-electron.spec.ts` timed out at its native
+resize on a 1280x800 Xvfb screen with openbox and without a window manager.
+It passed at 1920x1200 with openbox. The 1400x900 window's fit within the
+display is a possible cause. The recorded runs leave the cause and minimum
+working size unverified (Current state). The coordinator owns the choice.
+
+- **Fit the starting window to the display's work area (recommended).**
+  Use Electron's `screen.getPrimaryDisplay().workAreaSize` to size the window
+  before the resize. The existing headless Ozone setup sets a fixed 1280x860,
+  which exceeds the height of a 1280x800 screen.
+  - Pros: could give the resize room to change the terminal layout without
+    requiring callers to configure a larger Xvfb screen.
+  - Cons: needs a spec change and verification on the failing 1280x800
+    setup, scheduled CI and macOS.
+- **Document the passing Xvfb configuration and pass `-s "-screen 0 1920x1200x24"`.**
+  Apply it in agent-testing.md's command and in `electron-qualification.yml`.
+  - Pros: no spec change.
+  - Cons: every caller has to remember it, and CI's workflow changes.
+- **Record it as environmental.**
+  - Pros: nothing to change.
+  - Cons: the observed 1280x800 Xvfb failure remains unresolved.
 
 ### Task 1: showing the desktop case's windows on mbp3 (2026-11-15)
 
@@ -888,15 +942,131 @@ after 587 ms, 6 reads; `hidden` and 0 reads again) and passed in the suite
 and in 4 of 6 runs alone; the other two timed out at load averages near 145,
 before the fixture's page had loaded. The lock-screen case was not run (7568).
 
+### Real-display run on beelink, 2026-11-28 (task 1)
+
+On beelink (Omarchy 4.0.6, Linux 7.1.8-arch1-3, 16 cores, load average
+below 2 before the run). The display was Xvfb from `xorg-server-xvfb`
+21.1.25 with openbox 3.6.1 as its window manager; the user installed both
+that day. The run used Electron 45.4.1 and this branch at `a8e5ea708`. It
+ran from an agent shell on the signed-in Hyprland session, so every display
+variable was cleared first and `DISPLAY` came only from `xvfb-run` (`:101`).
+`dbus-run-session` gave the run a private session bus, so nothing it
+started could reach the desktop's notification daemon or portals.
+Hyprland's client list was read every few seconds throughout and never
+showed a new window. The desktop, backend and web bundles were built first.
+No profile was started, `ORKESTRATOR_HOST_REACHABILITY_CHECK=off` was set,
+and nothing bound 34121, 34122 or 45507. The Xvfb and openbox processes
+ended with the run.
+
+The wrapper outside the repository started `openbox --sm-disable` in the
+background, waited two seconds, ran `mise run test:agent:electron "$@"`
+and then stopped the openbox it had started:
+
+```bash
+ORKESTRATOR_AGENT_TEST_RUN_ID=t2181-beelink ORKESTRATOR_TEST_GROUP_TIMEOUT_MS=5400000 \
+  mise run test:logged -- --name t2181-beelink-electron -- \
+  env -u DISPLAY -u WAYLAND_DISPLAY -u ELECTRON_OZONE_PLATFORM_HINT -u XDG_SESSION_TYPE \
+    -u HYPRLAND_INSTANCE_SIGNATURE ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+    ORKESTRATOR_NATIVE_MENU_INPUT=1 \
+  xvfb-run -a -s "-screen 0 1280x800x24" dbus-run-session -- <wrapper>
+```
+
+**Whole suite** (one worker, 88 tests): 81 passed, 6 skipped, 1 failed,
+1341 s. The skips are the opt-in and other-platform cases: the Wayland
+rendering case, the hidden macOS profile's dialogs, the transport CPU
+measurement, the two container-environment annotation cases and the
+lock-screen case.
+
+| Spec | Result |
+| --- | --- |
+| `application-menu-electron.spec.ts` | 2 passed |
+| `artifact-host-electron.spec.ts` | 1 passed |
+| `connection-outage-electron.spec.ts` | 1 passed |
+| `design-canvas-electron.spec.ts` | 1 passed |
+| `electron-cleanup.spec.ts` | 1 passed |
+| `electron-main.spec.ts` | 10 passed, 1 skipped (Wayland) |
+| `headless-stop-electron.spec.ts` | 2 passed |
+| `hidden-dialogs-electron.spec.ts` | 1 skipped (macOS only) |
+| `local-gateway-transport-cpu-electron.spec.ts` | 1 passed, 1 skipped (opt-in measurement) |
+| `local-gateway-transport-electron.spec.ts` | 3 passed |
+| `pull-request-pane-electron.spec.ts` | 1 passed |
+| `relayed-events-electron.spec.ts` | 1 passed |
+| `renderer-log-boundary-electron.spec.ts` | 2 passed |
+| `renderer-permissions-electron.spec.ts` | 1 passed |
+| `service-preview-electron.spec.ts` | 23 passed |
+| `service-preview-seeded-electron.spec.ts` | 6 passed |
+| `startup-recovery-electron.spec.ts` | 3 passed |
+| `terminal-input-resume-electron.spec.ts` | 1 failed (below) |
+| `web-annotations-electron.spec.ts` | 20 passed, 2 skipped (container environments) |
+| `window-visibility-polls-electron.spec.ts` | 2 passed, 1 skipped (macOS lock screen) |
+
+**The failure.** `Electron keeps a lost terminal write fenced until Resume,
+without restarting the PTY` (`terminal-input-resume-electron.spec.ts:108`)
+failed at line 339: `expect.poll(resizes).toBeGreaterThan(resizesBefore)`
+timed out after 30 s with `Expected: > 2, Received: 2`. After the native
+`setSize(width - 240, height - 80)`, the main process sent no
+`local_terminal_resize`. The `X` write reached the editor and its response
+was lost. The spec confirmed that `X` was visible in the editor and that the
+recovery toast showed both buttons. The resize timeout came before the
+assertions that a subsequent `Y` write was fenced and that Resume cleared the toast. The
+timeout reproduced at 1280x800 with openbox and with no window manager.
+
+| Run of the file alone | Result |
+| --- | --- |
+| 1280x800, openbox, twice | Failed both times at line 339 |
+| 1280x800, no window manager | Failed at line 339 |
+| 1920x1200, openbox | Passed (39 s) |
+
+The full run and the two isolated openbox failures each captured screenshots
+at 1600x1142 and 1280x776. The run without a window manager captured 1600x1142
+and 1600x1200.
+
+The main window requests 1400x900 at creation
+(`apps/desktop/electron/window.ts`). That size exceeds the failing Xvfb
+screen, so display constraints could explain why shrinking the native window
+produced no terminal resize. The run did not record native window bounds
+before and after `setSize`. The spec sets a fixed 1280x860 only under headless
+Ozone. Flake cases 1320, 9937 and 0470 cover other steps of the same case.
+
+The scheduled `electron-qualification.yml` workflow invokes `xvfb-run -a`
+with no explicit screen size. Whether it reproduces the resize timeout is
+open. Record the effective Xvfb dimensions from the first observed CI run
+before comparing it with beelink.
+
+**`window-visibility-polls-electron.spec.ts`**, its `desktop-window-polls`
+attachment (400 ms poll, 2 s windows), in the whole suite and in a run of the
+spec alone just before it (2 passed, 1 skipped, 27.7 s):
+
+| Step | Whole suite: state, reads | Alone: state, reads |
+| --- | --- | --- |
+| Start | `hidden`, coordinator paused | The same |
+| Shown | `visible`, 8 reads | `visible`, 11 reads |
+| Hidden | `hidden`, 0 reads, paused | `hidden`, 0 reads, paused |
+| Shown again | `visible`, first read after 368 ms | `visible`, first read after 311 ms |
+| Minimised (openbox minimised it) | `hidden`, 0 reads, paused | `hidden`, 0 reads, paused |
+| Restored | `visible`, first read after 494 ms, 11 reads | `visible`, first read after 573 ms, 12 reads |
+| Covered | `isVisible()` true, document `hidden`, 0 reads, paused | The same |
+| Uncovered | `visible`, 9 reads | `visible`, 9 reads |
+
+No read happened while the window was hidden, in either run
+(`hiddenReads: 0`). So under Xvfb with openbox on the fleet's display host,
+as in the 2026-11-13 container and on macOS, a hidden, a minimised and a
+covered window all paused their polls. The beelink run did not trigger
+the covered-window decision in 7568. That decision remains conditional on
+a covered window reporting `visible` in the Windows run or the first
+scheduled CI runs under Xvfb without a window manager. The never-shown-window
+case reported:
+`hidden` with 0 reads; `visible` with throttling off, first read after
+158 ms and 10 reads; `hidden` with 0 reads once throttling was back on.
+
 ## Needs verification
 
-- The Electron specs under a real display on Linux: the full
-  `mise run test:agent:electron` under `xvfb-run`, from the first runs of
-  `electron-qualification.yml` (read in 7568 under 0031 task 8) or once 7568's
-  2181 task 1 Linux display host item provides a host. No agent host has Xvfb and the specs must not
-  open on the user's session, so only their no-display preflight and the
-  headless-capable specs have run on Linux hosts. On macOS the whole suite ran
-  on `mbp3` on 2026-11-15 (Current state).
+- The Electron specs under a real display on Linux ran in full on beelink on
+  2026-11-28 under Xvfb with openbox (Current state, "Real-display run on
+  beelink"). One case still needs a passing whole-suite run:
+  `terminal-input-resume-electron.spec.ts`, once the observed 1280x800 Xvfb
+  failure has been handled (Assumptions and decisions, 2026-11-28). On macOS
+  the whole suite ran on `mbp3` on 2026-11-15 (Current state).
   The design canvas spec is intermittent on beelink (flake
   [4250](../../tests/flaky-tests/design-canvas-and-artifacts/4250-design-electron-reachability-dialog-race.md)),
   with and without this change. CI's native-menu job covers three of them under
@@ -906,17 +1076,21 @@ before the fixture's page had loaded. The lock-screen case was not run (7568).
 - The Linux answer for `window-visibility-polls-electron.spec.ts` on the fleet
   host's display, from the same run: its `desktop-window-polls` attachment
   says whether a hidden, minimised and covered window reports `hidden` there
-  (task 1's Investigation). So far it has run on macOS (the never-shown and
-  lock-screen cases on `arktech-mini`, 2026-11-13; the desktop case on `mbp3`,
-  2026-11-15, where all three paused) and, on 2026-11-13, under Xvfb with
-  openbox in a throwaway container, where all three paused too (Current
-  state).
+  (task 1's Investigation). Answered on beelink on 2026-11-28: all three
+  paused under Xvfb with openbox (Current state). It had already run on macOS
+  (the never-shown and lock-screen cases on `arktech-mini`, 2026-11-13; the
+  desktop case on `mbp3`, 2026-11-15, where all three paused) and, on
+  2026-11-13, under Xvfb with openbox in a throwaway container, where all
+  three paused too. Coverage remains open for other Linux window managers,
+  Windows and the scheduled CI job's Xvfb without a window manager. The
+  decision in 7568 waits for a covered window to report `visible` in the
+  Windows run or the first scheduled CI runs.
 
 ## Related
 
 - 8300 (retired 2026-11-17; `git show 0265e7882:docs/todo/cross-cutting/8300-electron-suite-on-a-shared-mac-desktop.md`): the flakes (now cases 9938 to 9942 and 9949) and the desktop-focus failure message from task 1's run on `mbp3`, 2026-11-15.
 - [0031](0031-live-provider-and-platform-qualification.md) task 8: `electron-qualification.yml`, the weekly Linux Xvfb run of the whole suite that can give task 1 its Linux answer.
-- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do: the Windows check of task 1 (moved 2026-11-10), the desktop observation of task 4 (moved 2026-11-11), the covered-window decision of task 1 (moved 2026-11-13), the keyboard annotation case at an idle Mac and the lock-screen case of the window-visibility spec (both 2026-11-15), and the Linux display host, one of the two Linux runs task 1 waits on (filed under 6303 task 2 until 2026-11-15).
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do: the Windows check of task 1 (moved 2026-11-10), the desktop observation of task 4 (moved 2026-11-11), the covered-window decision of task 1 (moved 2026-11-13), the keyboard annotation case at an idle Mac and the lock-screen case of the window-visibility spec (both 2026-11-15), and the Linux display host, one of the two Linux runs task 1 waited on (filed under 6303 task 2 until 2026-11-15; answered 2026-11-28: beelink).
 - 6303 (retired 2026-11-15; `git show a8b89f154:docs/todo/cross-cutting/6303-window-close-during-request-throws.md`): its task 2 first asked for the display host; its own run was done on mbp3's real macOS display, and the crash it found is recorded in [process-crashes-and-kills.md](../../debugging/process-crashes-and-kills.md#7-a-native-dialog-during-a-quit-macos-sigsegv).
 - [0048](../transcripts-and-observation/0048-recurring-work-qualification.md), where this was found.
 - 7340 (retired 2026-11-11, see task 3 above), found in task 3's audit.

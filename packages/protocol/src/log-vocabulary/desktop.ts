@@ -67,6 +67,14 @@ export const DESKTOP_LOG_AREAS = defineLogAreas({
       "process-memory":
         "Development only: working set per Electron process type, sampled on an interval.",
       "process-memory.failed": "Development only: one process memory sample could not be read.",
+      "quit.signal-received": {
+        description:
+          "SIGTERM or SIGHUP (a logout, reboot or shutdown) started the quit, so the backend wait was cut to `backendWaitMs` for `essential.stopped` to be written before the system kills the process.",
+        essential: true,
+        fields: { signal: "label", backendWaitMs: "number" },
+      },
+      "quit.signal-repeated":
+        "Another termination signal arrived while a signal-started quit was running; it was ignored.",
       "quit.stopping-backend": "The app is quitting and has asked the Local backend to stop.",
       "realm-partitions.list-failed":
         "The partitions directory could not be read, so retired workspace realm storage stays until the next start.",

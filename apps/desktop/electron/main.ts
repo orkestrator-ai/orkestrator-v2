@@ -26,7 +26,12 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { LOCAL_CONNECTION_ID } from "@orkestrator/protocol/connections";
 import { BackendProcess, type BackendHttpClient } from "./backend-process.js";
 import { logBackendExit } from "./backend-exit-diagnosis.js";
-import { BACKEND_EXIT_WAIT_MS, registerBackendShutdown } from "./backend-lifecycle.js";
+import {
+  BACKEND_EXIT_WAIT_MS,
+  createBackendQuitWait,
+  registerBackendShutdown,
+} from "./backend-lifecycle.js";
+import { installQuitSignalHandlers } from "./quit-signals.js";
 import {
   LINUX_DESKTOP_ENTRY_FILENAME,
   PRODUCT_NAME,
@@ -1674,7 +1679,16 @@ if (isPrimaryInstance) {
   });
 }
 
-const backendShutdown = registerBackendShutdown(app, backendProcess);
+const backendQuitWait = createBackendQuitWait();
+const backendShutdown = registerBackendShutdown(
+  app,
+  backendProcess,
+  BACKEND_EXIT_WAIT_MS,
+  backendQuitWait,
+);
+// A logout, reboot or shutdown (SIGTERM/SIGHUP) quits with the backend wait
+// capped, so `essential.stopped` lands inside the session's stop timeout.
+installQuitSignalHandlers({ app, backendWait: backendQuitWait });
 // The loopback handoff page only exists while a sign-in is pending.
 app.on("will-quit", () => {
   void previewExternalHandoff.close().catch(() => undefined);

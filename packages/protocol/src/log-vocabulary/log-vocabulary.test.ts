@@ -34,6 +34,7 @@ const CURATED_ESSENTIAL_EVENTS = [
   "desktop backend.start-failed",
   "desktop main-thread.host-suspended",
   "desktop main-thread.stalled",
+  "desktop quit.signal-received",
   "desktop uncaught-exception",
   "docker bridge.launched",
   "docker bridge.listener-refused",

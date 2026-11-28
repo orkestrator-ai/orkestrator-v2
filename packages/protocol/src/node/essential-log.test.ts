@@ -221,6 +221,13 @@ describe("the curated events", () => {
       kept: { signal: "SIGTERM" },
     },
     {
+      area: "desktop",
+      event: "quit.signal-received",
+      level: "info",
+      fields: { signal: "SIGHUP", backendWaitMs: 3_000 },
+      kept: { signal: "SIGHUP", backendWaitMs: 3_000 },
+    },
+    {
       area: "backend",
       event: "shutdown.finished",
       level: "info",

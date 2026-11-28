@@ -41,6 +41,9 @@ Grok (task 4) ran later that day, after the user signed in, against `main`
 at `76cd71b58` (Grok Build 1.0.88): apply held in both scopes, with the user
 scope's edit cells unproven by a harness gap (see
 [Live apply record: Grok](#live-apply-record-grok-2026-11-26)).
+Task 10 decided by the user on 2026-11-28 against `main` at `a8e5ea708`:
+MCP apply stays on for every provider. Tasks 17 and 18 added the same day
+from the Grok live run's follow-up findings (#2571).
 
 ### Tasks
 
@@ -52,12 +55,15 @@ scope's edit cells unproven by a harness gap (see
 7. **Inactive environment, full mode and process-wide variant**: rerun the Claude inactive spec with model checks, and add a two-session Codex or OpenCode variant. Status: done (2026-11-06, fake model: the Claude spec passed in full mode, and the new Codex process-wide spec `mcp-apply-inactive-codex.spec.ts` passed; the optional pre-marker bridge step is retired, see the task; the real-model full run is a 7568 item, 0039 task 7).
 8. **Real-browser UI matrix remainder**: conflict recovery and secret replacement at desktop and narrow widths; a healthy plus failing Claude server with reconnect and reload. Status: done (2026-10-31, credential-free spec; reconnect on a running CLI unexercised, follow-up 1163, deleted 2026-11-06; its live check is task 13; its reconnect case failed from 2026-11-06 with the panel left stale, follow-up 7221, and passes again since that fix on 2026-11-09).
 9. **Containers and remote**: container catalogue through the Docker suite and a remote-browser check. Status: done (2026-11-06, doc only: container behaviour superseded by 0040; the remote check of host-target rows moved into 0040's task 3, now the 7568 item "0040 (retired) task 3").
+10. **Release decision on the all-on MCP management default**: keep `DEFAULT_MCP_MANAGEMENT_ROLLOUT` on for write and apply for every provider, or narrow some to write-only. Status: done (decided 2026-11-28 by the user: apply stays on for Claude, Codex, OpenCode, Cursor, Pi and Grok; no code change).
 11. **OpenCode user-file apply and sign-in follow-ups**: whether to offer an explicit idle-gated restart for user files (open question), and whether `mcp.auth.authenticate` could be driven from the panel (needs verification). Status: done (2026-11-06; both recommended options kept: no restart button, the CLI sign-in route, and the `mcp.auth.authenticate` verification item dropped).
 12. **Agent-account homes**: when a running Claude account session sees an editor write, a UI note that account-home servers are overwritten, and stale-server reporting for account-only servers. Status: done (2026-10-31; a live account session with a real login is unrun: it is a 7568 item, 0039 task 12).
 13. **Claude MCP reconnect on a running CLI**: with a real Claude login, a reconnect on a warm CLI and on a probe after the CLI exits gives the right list and layers, and survives a reload. Moved from to-do 1163 (deleted 2026-11-06). Status: done (2026-11-06, fake model instead of a real login: the list, layers and reload are right on both paths; the panel's live refresh after the reconnect is 7221's; the real-login run is a 7568 item, 0039 task 13).
 14. **Claude MCP rows read `unknown` after a refused CLI exits**: on a real browser, rows left `connecting` by a CLI that exited show `unknown` and still offer reconnect. Moved from to-do 1240 (deleted 2026-11-06). Status: done (2026-11-06; credential-free case in `mcp-ui-matrix.spec.ts`).
 15. **Cursor MCP inventory after a bridge restart.** Restore transcript calls as historical observations and require fresh evidence for `connected`. Status: open.
 16. **Unavailable-marker judgement in the MCP apply harness.** Recognize `MCPQ-UNAVAILABLE` at the end of a settled reply with narration. Status: open.
+17. **Grok's shell tool in the MCP apply harness busy check.** Make `hasRunningSleep` recognise Grok's `run_terminal_command` / `kind: execute` call, then optionally rerun Grok's user-scope edit, rename and restore cells (billed, needs the user's approval). Status: open.
+18. **Untrusted Grok project rows shown as `effective`.** The management snapshot lists servers from a project file Grok will not load (no folder-trust decision, project resources off) as `effective`. Status: open.
 
 ### 1. Replaced Claude server processes linger (code item 8)
 
@@ -535,6 +541,71 @@ two-machine run, so it is not dropped. The stale "every container target
 (read-only by design)" line under the completion matrix and the
 "Containers and remote" qualification bullet now point there.
 
+### 10. Release decision on the all-on MCP management default
+
+Status: done (decided 2026-11-28 by the user).
+
+**Problem.** `DEFAULT_MCP_MANAGEMENT_ROLLOUT`
+(`packages/protocol/src/mcp-management.ts`) turns the MCP editor on for
+write and apply on every agent platform. Before release, the user had to
+decide whether to keep that default or narrow some providers to write-only
+(save the file, but report no runtime apply).
+
+**Context.** A release decision reserved to the user, so it moved to the
+manual-test checklist
+([7568](../manual-test/7568-manual-test-checklist.md)) on 2026-11-10 and
+waited there on the Grok run (task 4). The checklist item recommended
+keeping all-on for Claude, Codex, OpenCode, Cursor and Pi, and deciding Grok
+apply from its run.
+
+**Investigation.** The evidence the decision used:
+
+- The loopback fake-model runs passed every probe cell for Claude, Codex and
+  Pi on 2026-11-06 and for OpenCode on 2026-11-10
+  ([fake-model record](#fake-model-live-record-2026-11-06),
+  [OpenCode record](#opencode-on-the-loopback-model-2026-11-10)).
+- Pi 1.5.2 passed every probe in both scopes on a real login on 2026-11-26,
+  `pending-next-turn` → `applied` per probed tab
+  ([real-login record](#live-apply-record-cursor-and-pi-on-real-logins-2026-11-26)).
+- Cursor (SDK 1.4.1) went `pending-next-turn` → `applied` in both scopes on
+  a real login the same day and passed 14 of 15 probes. The one failure, tab
+  B's user removal, reached no server with its nonce and was rejected by the
+  harness's exact-match reply rule (task 16), not by apply
+  ([real-login record](#live-apply-record-cursor-and-pi-on-real-logins-2026-11-26)).
+- Grok 1.0.88 went `restart-required` → `applied` in both scopes on a real
+  login the same day. The project scope passed on runtime evidence; every
+  one of the nine failures came from two harness gaps (tasks 16 and 17),
+  none from apply; and the untrusted project server was not started
+  ([Grok record](#live-apply-record-grok-2026-11-26)).
+
+**Decisions.**
+
+- **Which providers keep apply on?**
+  - **Keep all-on for all six providers: Claude, Codex, OpenCode, Cursor, Pi and Grok (recommended, chosen).**
+    - Pros: matches every live result (each save reported the apply
+      outcome its provider's strategy promises, and every failure traced to
+      the harness); no code change; users keep runtime feedback on every
+      platform.
+    - Cons: Grok's user-scope edit, rename-to-v2 and restore cells are
+      still unproven live until task 17 lets the busy check run; Cursor's
+      inventory after a restart can show a stale `connected` row (task 15).
+  - **Narrow Grok to write-only, keep the rest on.**
+    - Pros: claims nothing for Grok's unproven user-scope cells.
+    - Cons: throws away Grok's evidence that apply works (`restart-required`
+      → `applied` in both scopes, project scope proven on runtime evidence);
+      Grok users lose apply feedback for a gap that is in the harness, not
+      in apply. Rejected.
+  - **Narrow Cursor (and Grok) to write-only.**
+    - Pros: the most conservative release.
+    - Cons: Cursor applied in both scopes with 14 of 15 probes passing and
+      the one failure a harness judgement; narrowing it for that would be
+      unsupported by the evidence. Rejected.
+
+**Outcome (2026-11-28).** The user chose to keep apply on for every
+provider. `DEFAULT_MCP_MANAGEMENT_ROLLOUT` stays as it is; the 7568 item is
+ticked with the decision. The harness gaps the runs found are tasks 16 and
+17, the Cursor and Grok snapshot findings tasks 15 and 18.
+
 ### 11. OpenCode user-file apply and sign-in follow-ups
 
 **Problem.** User-scope OpenCode saves need a stop and start because OpenCode 1.19.4 caches `$XDG_CONFIG_HOME/opencode` for the server's lifetime, and the panel offers only CLI guidance for MCP OAuth.
@@ -818,6 +889,92 @@ missing row cannot establish tool availability for this case.
   harness match a discrete final marker. It requires an end-to-end check
   that the different providers preserve the necessary boundaries.
 
+### 17. Grok's shell tool in the MCP apply harness busy check
+
+**Problem.** The live apply spec's busy step never saves for Grok, so
+Grok's user-scope edit, rename-to-v2 and restore cells cannot be proven.
+
+**Context.** In the [Grok live record](#live-apply-record-grok-2026-11-26)
+(gap 1, three of the nine failures) the busy step stopped with "busy setup
+failed: no running foreground shell sleep was observed" and never saved v2.
+The rename's and the restore's "expected v2" failures follow from it, since
+the server still ran v1. The project scope has no busy step, so it was not
+affected. The 7568 Grok item stays open for these cells.
+
+**Investigation.** `hasRunningSleep` in
+`e2e/agent-testing/mcp-apply-live-support.ts` accepts a pending part only
+when its tool name matches
+`bash|shell|exec_command|run_shell_command|execute|terminal`. Grok's shell
+tool is `run_terminal_command` (`run_terminal_cmd` in some builds), which the
+ACP bridge already classifies as a command: `SHELL_TOOL_NAMES` in
+`bridges/acp-bridge/src/acp-tool-classification.ts` lists both names, and
+`PERMISSION_KIND_BY_TOOL` in `bridges/acp-bridge/src/acp-session.ts` maps
+them to the ACP `kind: execute`. The rest of the check (pending state, this
+run's marker, `sleep 45`, not backgrounded) applies unchanged. The
+existing case in `mcp-apply-live-support.test.ts` ("busy setup requires
+this run's pending foreground shell command") covers only `bash`.
+
+**Decisions.**
+
+- **How should the busy check recognise Grok's shell tool?**
+  - **Add Grok's names and the `execute` kind to the harness's own match (recommended).** Accept `run_terminal_command`, `run_terminal_cmd` and the other names in the ACP bridge's list, and a part whose tool kind is `execute`. Add the Grok part shape to the existing test, with the same negative cases (settled state, another marker, no `sleep 45`, backgrounded).
+    - Pros: a small, fixture-tested change; the harness stays independent of bridge internals.
+    - Cons: the harness keeps a second copy of the shell-name list, which can drift when a provider renames its tool.
+  - **Import `SHELL_TOOL_NAMES` from the ACP bridge.**
+    - Pros: one list for Grok's names.
+    - Cons: ties an e2e helper to a bridge's source layout; the list covers ACP agents only, so the harness still needs its own names for Claude, Codex, OpenCode, Cursor and Pi.
+- **Should Grok's user-scope cells be rerun live after the fix?**
+  - **Rerun only the Grok user scope once the fix lands, with the user's approval (recommended).** About 17 billed turns on a current Grok login, as in the 2026-11-26 run; the open 7568 Grok item is where the user approves and records it.
+    - Pros: proves the edit, rename-to-v2 and restore cells on a real model, the only cells of the matrix still unproven for Grok.
+    - Cons: billed turns and a Grok login that expires within a day.
+  - **Accept the fixture test alone.**
+    - Pros: no billed turns.
+    - Cons: the user-scope edit cells stay unproven live; the fixture proves only that the harness would wait correctly.
+
+### 18. Untrusted Grok project rows shown as `effective`
+
+**Problem.** The MCP management snapshot lists a Grok project server that
+Grok does not start as `effective`, so the editor says a server is live
+when no Grok session in that environment loads it.
+
+**Context.** In the [Grok live record](#live-apply-record-grok-2026-11-26)
+("Untrusted project"), a project `.grok/config.toml` server
+`mqp9_untrusted`, with project resources off and no folder-trust grant, was
+not started: the probe server's log was never created, the session's live
+MCP inventory was null, and `grok mcp doctor` reported "folder untrusted
+(repo-local server not started for an untrusted folder)". The management
+snapshot listed the definition as `effective`. That evidence is as the
+worker reported it; it is not part of `grok.json`.
+
+**Investigation.** `grokSources` in
+`apps/backend/src/core/mcp-management/providers.ts` gives the project source
+the verdict of `grokFolderTrust`
+(`apps/backend/src/core/mcp-management/native-policy.ts`) when project
+resources are off. With no decision in `trusted_folders.toml` that verdict
+is `unknown`, and `trustFields` sets `excludedReason` only for `excluded`
+(an explicit decline). `catalog.ts` reports `policy-excluded` only from
+`excludedReason`, so an `unknown` source's rows fall through to `effective`;
+the source header shows the trust reason in amber
+(`McpSourceList.tsx`), but the row status contradicts it. The same holds for
+Grok's in-project compatibility sources (the project `.mcp.json` and
+Claude's private entry), whose `compat` helper also excludes only on
+`excluded`. `grokFolderTrust`'s own comment notes that an interactive Grok
+may still ask about a repository with no decision, so `unknown` is not the
+same as declined for a Grok terminal.
+
+**Decisions.**
+
+- **How should the snapshot report a Grok project server in a folder with no trust decision?**
+  - **Report it as `policy-excluded`, with a reason that Grok sessions here do not start it until the repository is trusted or project resources are turned on (recommended).** Apply to the project source and the in-project compatibility sources, with service tests for `unknown`, `excluded` and `allowed`.
+    - Pros: matches the live session and `grok mcp doctor`; reuses an existing status, so no contract change and no new renderer label; the catalogue already leaves an excluded source out when it picks each name's winning definition (`isCandidate`), so a user-scope server of the same name is reported as the one Grok loads.
+    - Cons: understates a Grok terminal, where an interactive prompt can still grant trust and load the server; the reason has to say so.
+  - **Keep `effective` and add a status reason pointing at folder trust.**
+    - Pros: the smallest change; no apply behaviour moves.
+    - Cons: the status still claims a running server; the badge and the session keep disagreeing.
+  - **Add a new status such as `trust-pending`.**
+    - Pros: says exactly what is happening.
+    - Cons: a protocol contract change; older renderers cannot label it; more work for one provider's case.
+
 ## Current state
 
 The MCP server editor ([`mcp-management.md`](../../architecture/mcp-management.md))
@@ -1083,7 +1240,8 @@ Use temporary homes and harmless fixture servers; never the operator's files.
   ([record](#live-apply-record-cursor-and-pi-on-real-logins-2026-11-26)).
   Grok ran on 2026-11-26: `restart-required` → `applied` in both scopes, the
   user scope's edit cells unproven by a harness gap
-  ([record](#live-apply-record-grok-2026-11-26)). Claude, Codex and OpenCode have
+  ([record](#live-apply-record-grok-2026-11-26); the busy-check fix is
+  task 17). Claude, Codex and OpenCode have
   historical observations, with the corrected-check gaps below.
 - **Corrected live probes and completion matrix.** Rerun the busy-turn and
   negative tool-call checks, including Claude's warm SSE stale-server hook,
@@ -1492,28 +1650,31 @@ it. This evidence is as the worker reported it; it is not part of
 
 ### Follow-up findings
 
-For later to-dos; none is opened here.
+Each finding is a task in this to-do (tasks 17 and 18 added 2026-11-28).
 
 1. **Grok's shell tool in the busy check (gap 1).** `hasRunningSleep` does
    not know `run_terminal_command`, so Grok's busy edit never runs. Until it
    does, the user-scope edit, rename-to-v2 and restore cells cannot be
-   proven.
-2. **The terminal unavailable marker (gap 2).** Already
-   [task 16](#16-unavailable-marker-judgement-in-the-mcp-apply-harness);
+   proven. See
+   [task 17](#17-groks-shell-tool-in-the-mcp-apply-harness-busy-check).
+2. **The terminal unavailable marker (gap 2).**
+   [Task 16](#16-unavailable-marker-judgement-in-the-mcp-apply-harness);
    Grok adds six instances, all a one-line preamble before the marker.
-3. **Cursor's restored observations shown as live.** Already
-   [task 15](#15-cursor-mcp-inventory-after-a-bridge-restart)
+3. **Cursor's restored observations shown as live.**
+   [Task 15](#15-cursor-mcp-inventory-after-a-bridge-restart)
    (`seedObservedMcpTools`).
 4. **Untrusted Grok project rows shown as `effective`.** The management
    snapshot reports a project server in an untrusted folder as `effective`
-   although Grok does not start it.
+   although Grok does not start it. See
+   [task 18](#18-untrusted-grok-project-rows-shown-as-effective).
 
 ### Recommendation for task 10
 
 Keep Grok apply on: every save in both scopes reported `restart-required`
 and then `applied` after the restart, the project scope's runtime evidence
-matches every save, and the untrusted gate held. The decision itself stays
-with the user (task 10).
+matches every save, and the untrusted gate held. Decided 2026-11-28 by the
+user: apply stays on for all six providers, Grok included
+([task 10](#10-release-decision-on-the-all-on-mcp-management-default)).
 
 ## Live apply record: Cursor and Pi on real logins (2026-11-26)
 
@@ -1944,6 +2105,8 @@ directory and were deleted with it.
   the OpenCode upgrade step reran `verify:opencode:mcp-live`, which failed if
   a bump stopped caching the user files (removed with OpenCode 1.x on
   2026-11-11).
+- Resolved 2026-11-28 (task 10): the all-on default stays. MCP apply is
+  on for Claude, Codex, OpenCode, Cursor, Pi and Grok.
 
 ## Needs verification
 
@@ -1963,6 +2126,33 @@ directory and were deleted with it.
   session on a real signed-in account is still unrun (7568, 0039 task 12).
 
 ## Assumptions and decisions
+
+### 2026-11-28: task 10 decided, tasks 17 and 18 added
+
+Recorded from the user's decision of 2026-11-28 and the follow-up findings
+of the Grok live record (#2571); no code changed.
+
+#### Task 10: the decision is recorded, not re-derived
+
+The user chose to keep apply on for all six providers. The task records the
+options the checklist item offered and the live evidence it cited (the
+Cursor, Pi and Grok real-login records and the fake-model runs). The 7568
+item is ticked with the decision rather than deleted, as the checklist does
+for other answered decisions.
+
+#### Task 17: one task for the fix and the optional rerun
+
+The harness fix and the live rerun are one task, because the rerun proves
+nothing until the busy check waits on Grok's shell call. The rerun itself
+stays on the open 7568 Grok item, since it needs billed turns the user
+approves.
+
+#### Task 18: evidence kept as reported
+
+The `effective` row is evidence the Grok worker reported, not part of
+`grok.json`. The task cites it as that and points at the code path
+(`unknown` trust never sets an exclusion) so a worker can reproduce it with
+a service test before changing the status.
 
 ### 2026-11-26: tasks 4, 5 and 6, real-login runs
 
@@ -2514,7 +2704,7 @@ instead because it fitted in the same bridge change.
 
 ## Related
 
-- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 4, task 6's Cursor cells, task 10) moved there on 2026-11-10 (Cursor's cells and task 5's real-login Pi rerun ran and left it on 2026-11-26; Grok's task 4 ran the same day and stays there for the user-scope edit cells); task 1's upstream report is [`docs/upstream-issues/claude-code-replaced-mcp-server-lingers.md`](../../upstream-issues/claude-code-replaced-mcp-server-lingers.md), filed by the user through the checklist's "File the upstream reports" item; and the container session half of retired 0121 task 1.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 4, task 6's Cursor cells, task 10) moved there on 2026-11-10 (Cursor's cells and task 5's real-login Pi rerun ran and left it on 2026-11-26; Grok's task 4 ran the same day and stays there only for the user-scope edit cells, which wait on task 17; task 10 was decided there on 2026-11-28); task 1's upstream report is [`docs/upstream-issues/claude-code-replaced-mcp-server-lingers.md`](../../upstream-issues/claude-code-replaced-mcp-server-lingers.md), filed by the user through the checklist's "File the upstream reports" item; and the container session half of retired 0121 task 1.
 - [Port selection and the loopback address](../../architecture/container-lifecycle.md#port-selection-and-the-loopback-address-agent-tools-listents)
   in `container-lifecycle.md`: the fix for the agent tools port clash found
   under task 14 (todo 7220, closed 2026-11-06).

@@ -148,6 +148,16 @@ then got a default-pool network. The item left the decisions section. The
 evidence is in
 [container qualification](../../development/container-qualification.md#probe-network-sweep-on-beelinks-backlog-2026-11-26).
 
+Updated 2026-11-28: the user answered two decision items, which are ticked
+with their records. For 1031 (retired) task 9's firewall item the user chose
+beelink, whose ufw rule for the agent-test range dates from 2026-11-17; a
+fake-model recheck that day found the agent tools port reachable from a
+container environment, and the 1031 (retired) task 9 signed-in item notes
+that its firewall prerequisite is met. For 0031 task 7 (provider logins and
+run ownership) the user named mini as the host for provider-login runs, kept
+them few and cheap, and asked to be consulted before heavy or many-paid-call
+testing; 0031 records the answer and the login table and marks task 7 done.
+
 ### Tasks
 
 1. **Manual tests and live checks** (369 items): run each check under
@@ -155,7 +165,7 @@ evidence is in
 
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
    its result. Status: open.
-2. **Decisions, approvals and outward actions** (21 items): make each call
+2. **Decisions, approvals and outward actions** (18 items): make each call
    or take each action under
    [Decisions, approvals and outward actions](#decisions-approvals-and-outward-actions)
    and record it. Status: open.
@@ -329,16 +339,16 @@ agent can apply it.
 
 | Area | Manual tests and live checks | Decisions, approvals and outward actions |
 | --- | --- | --- |
-| Agent engines and provider SDKs | 74 | 3 |
+| Agent engines and provider SDKs | 74 | 2 |
 | CLI and slash commands | 6 | 0 |
 | Containers and environments | 34 | 2 |
 | Coordinator and Multi Review | 87 | 3 |
-| Cross-cutting | 106 | 8 |
+| Cross-cutting | 106 | 7 |
 | Design canvas | 5 | 0 |
 | MCP | 8 | 1 |
 | Service previews and web annotations | 18 | 1 |
 | Transcripts, observation and bandwidth | 31 | 2 |
-| **Total** | 369 | 20 |
+| **Total** | 369 | 18 |
 
 
 
@@ -413,6 +423,7 @@ agent can apply it.
   6. Cursor, signed in: sign-in through the bridge's `--login`, then a turn that uses tools and leaves a diff.
   Record: pass/fail per step with result paths, under the matching provider in [upgrade-agents.md](../../development/upgrade-agents.md) (1020 and 1031 are retired).
 - [ ] **1031 (retired) task 9 (signed-in part): signed-in runs at the 2026-11-06 pins.** Throwaway `dev:test` profile with real logins for every platform, on a host whose firewall lets Docker reach the agent-tools port (see the firewall item below).
+  Firewall prerequisite met (2026-11-28): beelink, with `--agent-tools-port` in 31500–31509 ([evidence](../../development/container-qualification.md#beelink-as-the-firewall-host-for-the-signed-in-upgrade-runs-2026-11-28)). The signed-in run itself stays open: it is billed and heavy, and needs the user's approval first.
   1. The billed coordinator-skills probe: `CLAUDE_CLI_PATH=<managed claude> bun src/services/coordinator-skills.live-probe.ts` from `bridges/claude-bridge`.
   2. Signed-in Pi and Grok sessions; `close-retention-live.spec.ts` for Cursor and OpenCode.
   3. Model and effort switches, compaction and sub-agent cards on every provider.
@@ -984,7 +995,8 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 #### Agent engines and provider SDKs
 
 - [ ] **0062 (retired) task 4: report Pi's terminal default upstream if it fails.** If the terminal check above shows `pi` starting on `openai/gpt-5.5` and being refused, file a report with Pi upstream (its `defaultModelPerProvider` names `gpt-5.5` for `openai`, which a ChatGPT login refuses; `findInitialModel` reaches it before `openai-codex`). Record: the issue link, or "not filed: terminal passed", reply to the coordinator.
-- [ ] **1031 (retired) task 9: apply the host firewall rule for Docker.** On the Linux host that ran `qa-1031-upgrade`, `ufw` drops Docker traffic to the agent-tools port, so the app's "Docker containers can't reach Orkestrator" dialog blocked `close-retention-live.spec.ts`. Apply the rule that dialog shows (or choose another host for 1031 (retired) task 9's signed-in item). Record: the rule applied and the host, or the host chosen instead, with that item's record in [upgrade-agents.md](../../development/upgrade-agents.md) (1031 is retired).
+- [x] **1031 (retired) task 9: apply the host firewall rule for Docker.** On the Linux host that ran `qa-1031-upgrade`, `ufw` drops Docker traffic to the agent-tools port, so the app's "Docker containers can't reach Orkestrator" dialog blocked `close-retention-live.spec.ts`. Apply the rule that dialog shows (or choose another host for 1031 (retired) task 9's signed-in item). Record: the rule applied and the host, or the host chosen instead, with that item's record in [upgrade-agents.md](../../development/upgrade-agents.md) (1031 is retired).
+  **Answered 2026-11-28: host chosen, beelink.** Its ufw rule for the agent-test range was added by the user on 2026-11-17 (`sudo ufw allow proto tcp from 172.16.0.0/12 to any port 31500:31509`); no rule was applied elsewhere. Checked the same day with fake models only, in a credential-free container fixture profile on `--agent-tools-port auto` (port 31500): the container environment reached `host.docker.internal:31500`; the on-demand reachability check answered `reachable` on both probes, with ufw's default DROP detected and no remediation; the "Docker containers can't reach Orkestrator" dialog did not appear; both container signals were `confirmed`; and `container-claude-terminal-signal.spec.ts` on the fake Messages API passed (1 of 1, rings 1 → 5). `close-retention-live.spec.ts` has no fake-model part and was not run. [Evidence](../../development/container-qualification.md#beelink-as-the-firewall-host-for-the-signed-in-upgrade-runs-2026-11-28). The signed-in item above records that its firewall prerequisite is met.
 
 - [ ] **1250 (retired) task 8: the cost of an automatic-switch notice.** After a real week with automatic switching on, count the automatic-switch notices and the main-coordinator turns they woke. Decide: keep waking every main coordinator (recommended), or deliver the notice without a wake so it is read at the coordinator's next turn. Record: the counts and the decision. Reply to the coordinator.
 
@@ -1016,7 +1028,8 @@ None open (both answered on 2026-11-14).
 - [ ] **[0030](../cross-cutting/0030-test-suite-and-ci-health.md) task 1 (also 7142 task 2, retired): apply the required-check ruleset on `main`.** Read 0030's Outstanding work item 1. Check first: `gh run list --branch main --workflow ci.yml --limit 3` shows three `success` runs and `gh api repos/orkestrator-ai/orkestrator-v2/rulesets` still returns `[]`. Then, from a checkout of `main`, run the `bun -e … | gh api -X POST repos/orkestrator-ai/orkestrator-v2/rulesets --input -` command given there, which posts the file's `json` block (required checks `bun fmt and oxlint`, `Typecheck`, `Unit and integration tests`). Verify with `gh api repos/orkestrator-ai/orkestrator-v2/rules/branches/main`. Record: the date, the ruleset id and the verify output, in 0030 item 1 (the two-week clock for 0030 task 6 starts then).
 - [ ] **7370 (retired) task 2: publish the gateway port migration note.** (Background: [releasing.md](../../development/releasing.md#pending-release-note-gateway-port-migration).) Releases containing the gateway port rule have already shipped without it. Decide where it goes (recommended: copy the "Pending release note: gateway port migration" text from releasing.md into the next release's notes) and publish it. Record: the release and where the note appeared; then tell an agent to remove the pending section from releasing.md.
 - [ ] **5021 (retired) task 1: set up and verify publishing the npm package from GitHub.** (Background: [releasing.md](../../development/releasing.md#publishing-the-npm-package-from-github).) You approved publishing from CI with provenance on 2026-11-14, and the workflow `.github/workflows/publish-npm.yml` is written. Before the next release, do the two settings: on GitHub, create the `npm-publish` environment (Settings → Environments) before any run, because GitHub creates a missing one with no reviewer, add yourself as a required reviewer, leave "Prevent self-review" off and limit deployment to the `main` branch; on npmjs.com, in the `orkestrator` package's Settings → Trusted publisher, add GitHub Actions with organization `orkestrator-ai`, repository `orkestrator-v2`, workflow filename `publish-npm.yml`, environment name `npm-publish` and the permission to publish (or from a terminal after `npm login`: `npm trust github orkestrator --file publish-npm.yml --repo orkestrator-ai/orkestrator-v2 --env npm-publish --allow-publish`, then `npm trust list orkestrator`). Then run the next release as usual (`mise run release:publish` starts the workflow and prints its address; approve the `npm-publish` deployment on GitHub when the notification says so). Check on the version's npm page that it shows the provenance badge naming the tagged commit and `publish-npm.yml`, that `npm view orkestrator dist-tags` has moved the channel's tag, and that `bunx orkestrator@<channel> --version` installs it. Once it has worked, set the package's publishing access to "Require two-factor authentication and disallow tokens" so only the workflow can publish. Record: the release, the workflow run's address, whether the provenance badge appeared, and pass/fail; reply to the coordinator. If the project later moves to another repository, update the trusted-publisher entry and the `repository` field of `packages/cli/package.json` together.
-- [ ] **[0031](../cross-cutting/0031-live-provider-and-platform-qualification.md) task 7: credentials and run ownership.** List which hosts hold which provider logins usable by agent-test profiles (Claude, Codex, OpenCode, Cursor, Grok, Pi; availability only, no secrets) and who runs the macOS, iOS and two-machine batches. Record: a table (provider, host, credential route, last verified) in 0031's Current state, and the run owners beside the batching index.
+- [x] **[0031](../cross-cutting/0031-live-provider-and-platform-qualification.md) task 7: credentials and run ownership.** List which hosts hold which provider logins usable by agent-test profiles (Claude, Codex, OpenCode, Cursor, Grok, Pi; availability only, no secrets) and who runs the macOS, iOS and two-machine batches. Record: a table (provider, host, credential route, last verified) in 0031's Current state, and the run owners beside the batching index.
+  **Answered 2026-11-28:** mini is the host for test runs that use provider logins; keep them few and cheap; ask the user's permission before any heavy testing or testing with many paid calls. The coordinator's agents run batches on mini by default, and the macOS display batches on mbp3 as before; billed batches need the user's approval. The table (beelink Claude valid on 2026-11-28; mbp3 Cursor, Pi and Grok valid on 2026-11-26; omarchy-hp Claude expired 2026-11-27/28 and renewed; the rest not verified) and the run owners are in [0031's Current state](../cross-cutting/0031-live-provider-and-platform-qualification.md#provider-logins-and-run-owners-2026-11-28), and 0031 task 7 is done.
 
 - [ ] **[0032](../cross-cutting/0032-dependency-upgrades.md) task 2: generate and install the update-manifest keys.** When electron-builder 27 is stable, generate two Ed25519 keys with `electron-builder create-update-key` (current and next). Keep the current private key in the password manager and in a mode-600 file outside the repository on the Mac and on the Linux release machine (for `ELECTRON_BUILDER_UPDATE_SIGN_KEY_FILE`); keep the next private key offline in the password manager only. A signed release is a one-way door. Record: both public keys (never a private key) and the key-file path on each release machine, in 0032 under task 2, so an agent can embed `updateManifest.publicKey: [current, next]` and wire `release:desktop`.
 

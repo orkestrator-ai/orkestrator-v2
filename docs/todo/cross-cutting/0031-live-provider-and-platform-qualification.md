@@ -5,16 +5,18 @@ Checked against `main` at `17d28238c` (2026-11-13).
 ## Task analysis
 
 Analysed 2026-11-13 against `main` at `17d28238c`. Updated 2026-11-14 for the
-user's decisions on tasks 6 and 8, and 2026-11-15 against `main` at
-`a8b89f154` for task 8's workflow.
+user's decisions on tasks 6 and 8, 2026-11-15 against `main` at
+`a8b89f154` for task 8's workflow, and 2026-11-28 against `main` at
+`a8e5ea708` for the user's answer to task 7.
 
 ### Tasks
 
 5. **Codex live and cold row layout**: a multi-agent v2 turn is one assistant row live but two after a cold reload; scrub the recorded stream, add it as a fixture, then align or document. Status: blocked (waits on 7568: 0031 task 5; the current layouts are pinned by a credential-free test).
 6. **Re-qualification rule after agent bumps**: write the maintainer's chosen rule into `docs/development/upgrade-agents.md`. Status: done (2026-11-14: the user chose the recommended rule; it is in [upgrade-agents.md](../../development/upgrade-agents.md#re-qualify-live-features-after-a-bump)).
+7. **Provider logins and run ownership**: list which hosts hold which provider logins for agent-test profiles, and who runs the billed, macOS, iOS and two-machine batches. Status: done (2026-11-28: the user's answer and the login table are under [Current state](#provider-logins-and-run-owners-2026-11-28)).
 8. **Scheduled CI for platform runs**: add a weekly and `workflow_dispatch` Linux job that runs `mise run test:agent:electron` under `xvfb-run` on GitHub runners, on the container workflow's schedule (the user's choice, 2026-11-14). Status: done (2026-11-15: `.github/workflows/electron-qualification.yml`; reading its first runs is 7568, 0031 task 8).
 
-Only task 5 is left, and it waits on a 7568 recording, so no agent work remains in this file until that recording exists. Tasks 2 (the transcript part coverage spec), 9 (Current state and the batching index) and 10 (the `graph-profiles` scenario) were done on 2026-11-13; see [Assumptions and decisions](#assumptions-and-decisions). Their live runs are items in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md#cross-cutting) (0031 tasks 2 and 10).
+Task 7 was answered by the user on 2026-11-28 and is done. Only task 5 is left, and it waits on a 7568 recording, so no agent work remains in this file until that recording exists. Tasks 2 (the transcript part coverage spec), 9 (Current state and the batching index) and 10 (the `graph-profiles` scenario) were done on 2026-11-13; see [Assumptions and decisions](#assumptions-and-decisions). Their live runs are items in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md#cross-cutting) (0031 tasks 2 and 10).
 
 ### 5. Codex live and cold row layout
 
@@ -44,6 +46,16 @@ Only task 5 is left, and it waits on a 7568 recording, so no agent work remains 
 **Investigation.** `docs/development/upgrade-agents.md` already has one such rule: slash commands must be re-qualified for every provider whose pin moved, before the upgrade merges, plus the inactive-path check. So the runbook has started answering this per feature rather than generally. Two opt-in specs added on 2026-11-13 are natural candidates for a per-bump rule: `transcript-parts-live.spec.ts` (Claude) and the coordinator suite's `graph-profiles` scenario (every provider).
 
 **Decisions.** Which rule to adopt was the maintainer's call (7568, 0031 task 6, from 2026-11-10). The user chose the recommended rule on 2026-11-14 (see Assumptions and decisions), and it is written into [upgrade-agents.md](../../development/upgrade-agents.md#re-qualify-live-features-after-a-bump). Done.
+
+### 7. Provider logins and run ownership
+
+**Problem.** Live-provider runs need a host signed in to that provider, and nothing recorded which host holds which login or who runs the billed, macOS, iOS and two-machine batches, so each run began by finding a signed-in host.
+
+**Context.** Agent-test profiles copy or reuse host logins through `--credential-source` ([credentials-and-models.md](../../development/credentials-and-models.md#agent-test-credential-policy)). Agents never sign in or out of a real login, so a lapsed login waits on the user. The question was a 7568 item (0031 task 7) from 2026-11-10.
+
+**Investigation.** On 2026-11-28 the user answered: mini is the host for test runs that use provider logins; such runs stay few and cheap; and an agent asks the user's permission before any heavy testing or testing with many paid calls. The login table under [Current state](#provider-logins-and-run-owners-2026-11-28) is built from the runs already recorded in the repository and from the coordinator's report of the 2026-11-28 runs. It lists availability only, never a secret. Nothing in the records shows a login on mini yet, so every mini row reads "not verified".
+
+**Decisions.** Done 2026-11-28. The user's answer is recorded under [Assumptions and decisions](#task-7-provider-logins-and-run-owners-2026-11-28), with the options it settled.
 
 ### 8. Scheduled CI for platform runs
 
@@ -185,6 +197,46 @@ evidence. This file only points at it.
   `apps/desktop/electron/app-version.ts`, from #1265), so stream reconnects no
   longer raise the version reminder.
 
+### Provider logins and run owners (2026-11-28)
+
+The user's answer to task 7 (2026-11-28):
+
+- **mini** is the host for test runs that use provider logins.
+- Keep such runs few and cheap.
+- **Ask the user's permission before any heavy testing or any testing with
+  many paid calls.** A billed batch needs the user's approval before it
+  starts.
+
+Run owners:
+
+| Batch | Runs on | Run by |
+| --- | --- | --- |
+| Provider-login (billed) runs | mini by default, after the user approves the batch | the coordinator's agents |
+| Other batches (credential-free, Linux, Docker) | mini by default, or the host the item names | the coordinator's agents |
+| macOS display batches (a real Electron window, Docker Desktop, Safari) | mbp3, as before | the coordinator's agents |
+| iOS and two-machine batches | not decided separately: under the default, mini (iOS needs macOS with Xcode; a two-machine run needs a second node) | the coordinator's agents |
+
+Which hosts hold which provider logins, from the recorded runs (availability
+only; a login can lapse after the date shown). "Not verified" means no
+recorded run shows it either way. The route is how a `dev:test` profile gets
+the login ([credentials-and-models.md](../../development/credentials-and-models.md#summary)).
+
+| Provider | Host | Credential route | Last verified |
+| --- | --- | --- | --- |
+| Claude | beelink | host Claude login (Claude Max), passed as a process-scoped access token by `--credential-source claude` | valid on 2026-11-28 (8102 task 7 run, reported by the coordinator) |
+| Claude | omarchy-hp | host Claude login | expired 2026-11-27/28 and renewed by the user (reported by the coordinator); not re-checked by a run |
+| Claude | mbp3 | host Claude login (Keychain) | not verified (the credential diagnosis is a 7568 item, 0722 (retired) task 6) |
+| Claude | mini | host Claude login (Keychain) | not verified (its 2026-11-14 sandbox checks used a fixture-only API key) |
+| Codex | any host | owner-only copy of the host `auth.json`, no refresh token | not verified on any host since the 2026-11-10 analysis |
+| OpenCode | any host | owner-only copy of the host `auth.json` | not verified: every OpenCode 2 run so far used a scripted model |
+| Cursor | mbp3 | host Cursor SDK login, minted key | valid on 2026-11-26 ([0039 record](../mcp/0039-mcp-management.md#live-apply-record-cursor-and-pi-on-real-logins-2026-11-26)) |
+| Pi | mbp3 | host `~/.pi/agent/auth.json` in place (`openai-codex` ChatGPT OAuth) | valid on 2026-11-26 ([0039 record](../mcp/0039-mcp-management.md#live-apply-record-cursor-and-pi-on-real-logins-2026-11-26)) |
+| Grok | mbp3 | isolated snapshot of the host Grok login | valid on 2026-11-26, signed in by the user that day; the login ran until 2026-11-27T01:28Z ([0039 record](../mcp/0039-mcp-management.md#live-apply-record-grok-2026-11-26)) |
+| Cursor, Pi, Grok | beelink, omarchy-hp, mini | as above | not verified |
+
+Every row for mini is "not verified", so the first approved billed batch
+there should start with a cheap signed-in check per provider it needs.
+
 ## Outstanding work
 
 ### Code
@@ -305,6 +357,12 @@ evidence. This file only points at it.
 Platform runs, and the todo files with items for each. The runs themselves
 are items in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md),
 each naming its source to-do and task; the source to-do holds what to assert.
+
+Run owners (the user's answer to task 7, 2026-11-28; details under
+[Provider logins and run owners](#provider-logins-and-run-owners-2026-11-28)):
+the coordinator's agents run the batches, on mini by default, and the macOS
+display batches on mbp3 as before. A provider (billed) batch needs the user's
+approval before it starts, and is kept few and cheap.
 Links checked 2026-11-13: every linked file exists, and retired to-dos are
 cited as `NNNN (retired)`.
 
@@ -799,6 +857,27 @@ checklist's decisions section.
   `xvfb-run` on GitHub runners, on the container workflow's schedule. Live
   provider suites stay manual. Task 8 is open agent work.
 
+### Task 7: provider logins and run owners (2026-11-28)
+
+Answered by the user on 2026-11-28, from the manual-test checklist's
+decisions section (0031 task 7).
+
+- **Which host runs provider-login tests.** Options: (a) one host for all of
+  them (pros: one place to keep logins fresh, one place to look; cons: a
+  provider whose login lives elsewhere waits for a sign-in there); (b) each
+  run on whichever host holds that login (pros: no sign-in needed; cons:
+  logins scattered over four hosts, each lapsing on its own). The user chose
+  (a), with **mini** as the host.
+- **Cost.** Keep provider-login runs few and cheap, and ask the user before
+  any heavy testing or testing with many paid calls. A billed batch is
+  approved by the user before it starts.
+- **Run owners.** The coordinator's agents run the batches on mini by
+  default; the macOS display batches stay on mbp3. iOS and two-machine
+  batches were not named separately, so they follow the default.
+- **The login table.** Built from recorded runs only and the coordinator's
+  report of 2026-11-28; anything without a run is "not verified" rather than
+  assumed. Task 7 is done.
+
 ### Task 8: a workflow of its own
 
 Recorded 2026-11-15 while building task 8, as are the task 8 entries below.
@@ -877,7 +956,7 @@ and the first scheduled run is 7568 (0031 task 8).
 
 - [0030-test-suite-and-ci-health.md](0030-test-suite-and-ci-health.md) for CI gates and
   slow or flaky suites.
-- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (tasks 1, 3, 4 and 7, the live run of task 2, the recording of task 5, the decision of task 6, and the remaining live runs of task 10) moved there on 2026-11-10, and the decision of task 8 on 2026-11-13 (answered 2026-11-14); reading the first runs of task 8's workflow moved there on 2026-11-15.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (tasks 1, 3, 4 and 7 (answered 2026-11-28), the live run of task 2, the recording of task 5, the decision of task 6, and the remaining live runs of task 10) moved there on 2026-11-10, and the decision of task 8 on 2026-11-13 (answered 2026-11-14); reading the first runs of task 8's workflow moved there on 2026-11-15.
 - [version-compatibility.md](../../architecture/version-compatibility.md#the-support-window) for
   old-client and old-bridge runs.
 - [agent-engines.md](../../architecture/agent-engines.md#maintaining-the-opencode-integration)

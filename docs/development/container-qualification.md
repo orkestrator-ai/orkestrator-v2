@@ -763,6 +763,57 @@ re-armed and confirmed again 5 min later, as designed.
   containers, two volumes and one network, and the image was removed by its
   tag. No firewall, network or Docker daemon setting was changed.
 
+## beelink as the firewall host for the signed-in upgrade runs (2026-11-28)
+
+The 1031 (retired) task 9 decision item asked for the host firewall rule
+to be applied, or for another host whose firewall already lets containers
+reach the agent tools port. The user chose beelink, which has carried the
+agent-test range rule since 2026-11-17
+([above](#container-state-signals-on-a-firewalled-linux-engine-host-2026-11-17)).
+This run rechecked it with fake models only: no login, no billed turn.
+
+- **Host:** beelink, rootful Docker Engine 29.9.2, ufw enabled with default
+  incoming policy DROP and the 2026-11-17 rule unchanged.
+- **Profile:** `fw-1031-beelink` from `main` at `a8e5ea708`, started from a
+  shell with the inherited `ORKESTRATOR_*`, `CLAUDE*`, `ANTHROPIC*` and
+  `NODE_ENV` variables unset and `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`:
+  `mise run dev:test --profile fw-1031-beelink --fixture
+  --fixture-environments local,container --no-agent-credentials
+  --no-host-seed --agent-platforms claude --headless --agent-tools-port auto`.
+  `auto` gave port **31500**. The image was `orkestrator-v2:dev-4caad292fa92`;
+  the environment network came from the daemon's pool (`172.18.0.0/16`).
+- **Container to agent tools port:** from the container environment,
+  `host.docker.internal:31500` answered HTTP 404 in 63 ms (the agent tools
+  server, so the port is open).
+- **Reachability check:** the boot check was off, so it ran on demand
+  (`check_container_host_reachability`, the dialog's "Check again"):
+  `reachable`, "Docker containers can reach Orkestrator's agent tools server
+  on port 31500", with both probes reachable (HTTP 405 from `/mcp`: the
+  default bridge `172.17.0.0/16` in 562 ms and the probe environment network
+  `172.19.0.0/16` in 702 ms), firewall detected as ufw with default incoming
+  DROP, and no remediation offered.
+- **Dialog:** the "Docker containers can't reach Orkestrator" dialog did not
+  appear in the browser client after the check. The only dialog was the
+  expected "Claude Code is not logged in" notice of a credential-free profile.
+- **Signals:** both container signals `confirmed` before any test (one
+  container each, one ring each, `fallback` 0, no demotion).
+- **Fake-model spec:** `ORKESTRATOR_AGENT_TEST_FAKE_CLAUDE_API=1 mise run
+  test:agent:docker -- container-claude-terminal-signal.spec.ts --workers=1`
+  through `test:logged`: exit 0, 1 passed, 0 skipped, 17.1 s. Enter to the
+  sidebar showing working 292 ms (foreground) and 216 ms (background); Stop
+  hook to the sidebar showing waiting 301 and 223 ms. Claude signal rings
+  1 → 5, `confirmed` throughout, `fallback` 0.
+- **Not run:** `close-retention-live.spec.ts` has no fake-model part (every
+  case is a real provider turn), so it was not run. The signed-in runs of
+  1031 (retired) task 9 stay open in the
+  [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md):
+  they are billed and need the user's approval.
+- **Cleanup:** `dev:stop`, then `dev:reset` removed the profile's two
+  containers, two volumes and one network; the on-demand check had already
+  removed its own probe network. The workspace image the profile built
+  (`orkestrator-v2:dev-4caad292fa92`) was left in place. No firewall,
+  network or Docker daemon setting was changed.
+
 ## GitHub ranges seed directory bind on beelink (2026-11-15)
 
 To-do [7549](../todo/containers-and-environments/7549-rootless-docker-cp-refusals.md)

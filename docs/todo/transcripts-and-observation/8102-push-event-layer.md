@@ -21,9 +21,12 @@ moved onto them (task 4), the command-node subscription controller (task 6)
 and the
 measurement against the baseline (task 7, on a deterministic fixture and the
 credential-free live spec B). The living doc is
-[push-events.md](../../architecture/push-events.md) (task 5). The only item
-left is the billed real-Claude rerun of baseline A, which needs the user and
-is in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md).
+[push-events.md](../../architecture/push-events.md) (task 5). Updated
+2026-11-28 at `a8e5ea708`: the billed real-Claude rerun of baseline A ran on
+beelink with the user's approval and passed (task 7). A quiet running tab
+fell from 2.2 to 0.12 requests a second per viewer, and a second viewer
+added no observer reads. What remains is the node controller check across
+two live profiles under [Needs verification](#needs-verification).
 See [Assumptions and decisions](#assumptions-and-decisions).
 
 ### Tasks
@@ -34,7 +37,7 @@ See [Assumptions and decisions](#assumptions-and-decisions).
 4. **Further surfaces**: measure the other live surfaces' request volume, then move them onto the layer one at a time, highest volume first. Status: done (2026-11-19) for every surface the ticket names (environment lifecycle, attention, workflow status including Auto-pipeline and the Multi Review PR step, reviewer and step transcripts, command output); the polls of surfaces it does not name (C02, C06, C07) are listed under task 4.
 5. **Promote the design to a living doc**: [push-events.md](../../architecture/push-events.md), linked from `event-snapshot-recovery.md` and `recurring-work.md`. Status: done (2026-11-19); this file keeps the design and the decision record.
 6. **Node subscription controller (D10)**: let a window subscribe to a node it reaches through a command node, through a controller on the command node that unions and reference-counts downstream sets. Status: done (2026-11-19).
-7. **Measure the result against the baseline**: repeat baselines A and B on the new commit, one and two viewers, and the reconnect and inactive-view cases. Status: done (2026-11-19) on the deterministic fixture and live spec B; the billed real-Claude rerun of baseline A is in the manual-test checklist.
+7. **Measure the result against the baseline**: repeat baselines A and B on the new commit, one and two viewers, and the reconnect and inactive-view cases. Status: done (2026-11-19 on the deterministic fixture and live spec B; 2026-11-28 the billed real-Claude rerun of baseline A on beelink).
 
 ### 1. Design and baseline
 
@@ -361,8 +364,69 @@ metrics are in `/__orkestrator/metrics` under `push`.
   closed.
 - **Live spec B** (credential-free, Claude, isolated profile): bridge state
   polls with two viewers 40 in 20 s against the baseline's 80.
-- **Not run:** baseline A with real Claude (billed), in the manual-test
-  checklist.
+- **Live spec A, real Claude (2026-11-28).** The details are below.
+
+**Live spec A, real Claude (2026-11-28).** Host beelink (Linux x64, other
+work running), commit `a8e5ea708`. Isolated profile `push-quiet-beelink`
+(`--headless`, `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`), using the host's
+Claude login through `--credential-source claude`. The spec selects the
+catalogue's Haiku entry (`modelId` in the spec); the profile log that would
+name the model was removed by `dev:reset`, so the model id was not read
+back. Billed turns: three. `running-quiet` sends two (the quiet turn and the
+reconnect turn) and `running-quiet-two-viewers` sends one; each turn runs a
+foreground `sleep` tool call. Both cases passed in 238.7 s, each at the
+first attempt. Commands, run with every inherited `ORKESTRATOR_*`,
+`CLAUDE*` and `ANTHROPIC*` variable and `NODE_ENV` unset (see
+[Assumptions and decisions](#task-7-real-claude-baseline-a-on-beelink-2026-11-28)):
+
+```bash
+ORKESTRATOR_HOST_REACHABILITY_CHECK=off mise run dev:test --profile push-quiet-beelink \
+  --fixture --headless --credential-source claude --agent-platforms claude
+ORKESTRATOR_AGENT_TEST_PROFILE=push-quiet-beelink ORKESTRATOR_AGENT_TEST_RUN_ID=push-quiet-beelink \
+  ORKESTRATOR_AGENT_TEST_LIVE_TAB_REQUESTS=1 ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+  mise run test:logged -- --name push-quiet -- bunx playwright test \
+  --config e2e/agent-testing/playwright.browser.config.ts agent-tab-requests-live.spec.ts \
+  --workers=1 --reporter=line --grep running-quiet
+```
+
+The spec doesn't record the `push` block, so a side process polled
+`/__orkestrator/metrics` every 2 s and kept only the `push` block. The
+one-viewer row covers the last 22 s of that 40 s window, because the poller
+started late. The two-viewer row covers 38 s of its 40 s window.
+
+| Measure | Baseline A, one viewer | Push, one viewer | Push, two viewers (first / second) |
+| --- | --- | --- | --- |
+| Requests in 40 s | 88 (84 live updates, 4 discovery) | 5 (3 live updates, 2 discovery) | 5 / 4 (3 / 3 live updates, 2 / 1 discovery) |
+| Requests a second | 2.20 | 0.12 | 0.12 / 0.10 |
+| Wire bytes | 228,813 | 17,223 | 17,221 / 15,587 |
+| Live update answers (gateway) | 84; 126,739 B | 3; 3,326 B (1.1 KB each) | 6; 6,654 B (1.1 KB each) |
+| Discovery answers (gateway) | 4; 129,636 B | 2; 33,670 B (16.8 KB each) | 3; 66,859 B (22.3 KB each) |
+| `push`: frames; changes; frame bytes | — | 1; 1; 260 B (22 s) | 2; 2; 516 B (one change published, one frame to each viewer) |
+| `push`: `native-session` observer reads; wakes; bridge wakes | — | 2; 3; 1 (22 s) | 3; 3; 1 |
+| `push`: subscriptions; observed keys; observers; bridge observers | — | 1; 1; 1; 1 | 2; 1; 1; 1 |
+| `push`: back-pressure holds, pending entries, resyncs, denials, set refusals | — | all 0 | all 0 |
+| Reconnect: first read after the page came back online | 57 ms | 51 ms | — |
+
+Against the expected result
+([push-events.md](../../architecture/push-events.md#measured-result)):
+
+- **Recurring reads per viewer: 96% fewer, not the fixture's 98.3%.** There
+  were 3 live updates per viewer in 40 s (4.5 a minute), against the
+  fixture's 2 a minute. Each window had one real session change
+  (`changesPublished` +1, `native-session` `changes` +1), so each viewer read
+  once on the frame, plus the recovery poll. The fixture's quiet session
+  never changes. The change's content was not recorded.
+- **A second viewer adds no observer reads.** One observer served both
+  subscriptions, with 3 reads in 38 s (4.7 a minute; the one-viewer run had 2
+  in 22 s). The change went out as one frame to each viewer. Bridge requests
+  themselves are not counted at the gateway, so this is the observer's read
+  count, not a bridge-side count.
+- **Wire bytes per viewer: 92.5% fewer (228,813 to 17,223 in 40 s), not
+  98.3%.** Live updates match the fixture at about 1.1 KB per answer.
+  Discovery answers carry most of the rest, and the fixture doesn't model
+  them. They were 16.8 to 22.3 KB each, not the few hundred bytes of an
+  `unchanged` answer that 8151 (retired) expected (7568's 8151 task 2 item).
+  The spec doesn't record how many were `unchanged`.
 
 **Decisions.**
 
@@ -998,9 +1062,11 @@ the review:
 ## Needs verification
 
 - The one-viewer real-Claude figures come from one run (they agree with
-  1202's 2.1 requests a second) and the two-viewer figures from two. Repeat
-  both on the same host in the billed baseline A rerun (manual-test
-  checklist).
+  1202's 2.1 requests a second) and the two-viewer figures from two. The
+  push rerun of baseline A (task 7, 2026-11-28) ran once on beelink, not on
+  arktech-mini where the baseline was taken, and the old commit was not
+  rerun on beelink. The difference (2.2 against 0.12 requests a second) is
+  far larger than any host effect.
 - The node subscription controller has not run across two live profiles
   (D12's `federation-two-profile-fake-model.ts` case); it is covered by unit,
   relay and gateway tests with a fake leaf.
@@ -1203,6 +1269,32 @@ Baseline A uses real Claude turns and is billed, so it cannot run in an
 unattended build. The deterministic fixture covers the same workload
 (`running-quiet`, one and two viewers) and live spec B ran credential-free;
 the billed rerun is in the manual-test checklist.
+
+### Task 7: real-Claude baseline A on beelink (2026-11-28)
+
+The user approved a few billed Haiku turns and asked for the run on beelink.
+Results are under task 7.
+
+- **Inherited environment.** The worker shell descends from the production
+  backend. Its `CLAUDE_CONFIG_DIR`, `CLAUDE_CLI_PATH`, resource root and agent
+  MCP URL (port 45507) all point into the real data directory, and
+  `dev:test` passes its environment through to Electron. Every
+  `ORKESTRATOR_*`, `CLAUDE*` and `ANTHROPIC*` variable and `NODE_ENV` were
+  unset for `dev:test`, `dev:login`, the spec and the clean-up. With
+  `CLAUDE_CONFIG_DIR` unset, the credential source read the default
+  `~/.claude` login (read only, valid for 7.5 hours at the start). The
+  alternative, launching with the shell as it is, would have pointed the
+  profile's Claude lookup at the production agent-account directory.
+- **The `push` block.** The spec records only gateway command deltas, so the
+  `push` block came from a side poller with its own `dev:login` cookie
+  session. The poller kept only the `push` block, and the cookie jar was in
+  a private temporary directory that was deleted afterwards. Changing the
+  spec mid-run, or adding a second run, would have cost more billed turns.
+  The poller started late, so the one-viewer `push` figures cover 22 of the
+  40 seconds.
+- **Toolchain.** Host seeding copied the pinned Claude CLI into the profile,
+  the documented path for `--credential-source`. No production binary or
+  backend ran.
 
 ### Task 4: Auto-pipeline rides the `workflow` topic with a digest (2026-11-19)
 

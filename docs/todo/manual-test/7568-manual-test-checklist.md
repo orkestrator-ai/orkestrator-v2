@@ -337,8 +337,8 @@ agent can apply it.
 | Design canvas | 5 | 0 |
 | MCP | 8 | 1 |
 | Service previews and web annotations | 18 | 1 |
-| Transcripts, observation and bandwidth | 31 | 2 |
-| **Total** | 369 | 20 |
+| Transcripts, observation and bandwidth | 31 | 1 |
+| **Total** | 369 | 19 |
 
 
 
@@ -1054,7 +1054,10 @@ None open (both answered on 2026-11-14).
 
 #### Transcripts, observation and bandwidth
 
-- [ ] **[8102](../transcripts-and-observation/8102-push-event-layer.md) task 7: measure push against the polling baseline with real Claude.** (The design review this item used to ask for was answered on 2026-11-19 by the ticket that built the layer; see 8102's Assumptions and decisions.) Billed: a few Haiku turns. Rerun baseline A (`running-quiet` and `running-quiet-two-viewers` of `agent-tab-requests-live.spec.ts`) on a disposable profile with a Claude login, as under 8102's "How to repeat it", and record per viewer the requests a second, wire bytes and the gateway's `push` metrics block. Expected (the deterministic fixture's result, [push-events.md](../../architecture/push-events.md#measured-result)): a quiet running tab sends about one read per 30 s per viewer instead of 2.1–2.2 a second, and a second viewer adds no bridge reads.
+- [x] **[8102](../transcripts-and-observation/8102-push-event-layer.md) task 7: measure push against the polling baseline with real Claude.** (The design review this item used to ask for was answered on 2026-11-19 by the ticket that built the layer; see 8102's Assumptions and decisions.) Billed: a few Haiku turns. Rerun baseline A (`running-quiet` and `running-quiet-two-viewers` of `agent-tab-requests-live.spec.ts`) on a disposable profile with a Claude login, as under 8102's "How to repeat it", and record per viewer the requests a second, wire bytes and the gateway's `push` metrics block. Expected (the deterministic fixture's result, [push-events.md](../../architecture/push-events.md#measured-result)): a quiet running tab sends about one read per 30 s per viewer instead of 2.1–2.2 a second, and a second viewer adds no bridge reads.
+
+  Done 2026-11-28 on beelink at `a8e5ea708`, three billed turns, with Haiku as the spec selects it; both cases passed. Results are in [8102 task 7](../transcripts-and-observation/8102-push-event-layer.md#7-measure-the-result-against-the-baseline). Per viewer: 0.12 requests a second with one viewer and 0.12 / 0.10 with two, against 2.2. Wire bytes in 40 s: 17,223 with one viewer and 17,221 / 15,587 with two, against 228,813. One `native-session` observer served both viewers, so a second viewer added no observer reads. Each window had one real session change, so each viewer made 3 live-update reads in 40 s rather than the fixture's 2 a minute. Discovery answers of 16.8 to 22.3 KB carry most of the bytes; the fixture doesn't model them.
+
 - [ ] **2681 (retired) task 5: delete the preview-worker leftovers on GitHub.** The pull route is gone (behaviour: [transcript-artifacts-runtime.md](../../architecture/transcript-artifacts-runtime.md#preview-worker)). Check `git ls-remote --heads origin 'preview-worker-pin/*'`, then decide whether to delete the remote branch `preview-worker-pin/cfbafc5d238e4eb3232bf` and, if nothing else uses it, the GHCR package `ghcr.io/orkestrator-ai/orkestrator-v2/artifact-preview-worker` (needs package admin rights). Record: reply to the coordinator with deleted or kept for each, and the date.
 
 ## Constraints and rationale

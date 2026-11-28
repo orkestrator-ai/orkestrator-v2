@@ -1223,7 +1223,10 @@ sudo ufw allow proto tcp from 172.16.0.0/12 to any port 31500:31509 comment 'Ork
 Changing the host firewall is the host owner's decision; agents never run it.
 beelink has carried this rule since 2026-11-17; a profile there on a port in
 the range had both container signals `confirmed`
-([evidence](container-qualification.md#container-state-signals-on-a-firewalled-linux-engine-host-2026-11-17)).
+([evidence](container-qualification.md#container-state-signals-on-a-firewalled-linux-engine-host-2026-11-17)),
+and again on 2026-11-28 on port 31500, with the on-demand reachability check
+`reachable`
+([evidence](container-qualification.md#beelink-as-the-firewall-host-for-the-signed-in-upgrade-runs-2026-11-28)).
 A profile whose environment network was allocated from a `192.168.0.0/16` pool
 needs that network's subnet admitted as well (`docker network inspect` shows
 it), as the installed app's own rule on such a host does. The rule is removed

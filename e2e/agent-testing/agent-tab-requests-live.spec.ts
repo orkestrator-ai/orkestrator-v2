@@ -23,7 +23,7 @@
  */
 import { expect, test, fetchModulesOutsideChromium, type Page, type Request } from "./browser-test";
 import { spawnSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { appendFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { PANE_LAYOUT_VERSION } from "@orkestrator/protocol/pane-layout";
@@ -40,7 +40,13 @@ type CommandBucket = {
   durationMs: number;
 };
 type GatewayMetrics = { commands: Record<string, CommandBucket> };
-type SessionRequest = { at: number; command: string; wireBytes: number };
+type SessionRequest = {
+  at: number;
+  command: string;
+  wireBytes: number;
+  /** A discovery answer's shape (`discoveryShape`); content free. */
+  discovery?: Record<string, unknown>;
+};
 
 const repositoryRoot = path.resolve(import.meta.dirname, "../..");
 const profile = process.env.ORKESTRATOR_AGENT_TEST_PROFILE ?? "codex-qa";
@@ -56,6 +62,94 @@ const SLEEP_SECONDS = 75;
 /** The two-viewer case also opens a second page before its window. */
 const TWO_VIEWER_SLEEP_SECONDS = 110;
 const TURN_DEADLINE_MS = 5 * 60_000;
+
+/**
+ * Stop `running-quiet` after its window instead of running the reconnect turn:
+ * one billed turn fewer when only the window's numbers are wanted.
+ */
+const SKIP_RECONNECT = process.env.ORKESTRATOR_AGENT_TEST_TAB_REQUESTS_SKIP_RECONNECT === "1";
+
+const shortHash = (value: unknown) =>
+  createHash("sha256")
+    .update(JSON.stringify(value) ?? "")
+    .digest("hex")
+    .slice(0, 10);
+
+/**
+ * One `get_native_agent_discovery_update` answer reduced to what says why it
+ * was the size it was: its status, whether the token the page sent matched,
+ * and per section the availability, revision, bytes, entry count and a short
+ * value hash, so two snapshots show which section moved. Hashes, counts and
+ * names of summary fields only: no command, model, server or notice text.
+ */
+function discoveryShape(text: string, sent: { knownToken?: unknown; forceSnapshot?: unknown }) {
+  let result: {
+    status?: string;
+    resetReason?: string;
+    token?: string;
+    value?: { sections?: Record<string, Record<string, unknown>> };
+  } = {};
+  try {
+    result = (JSON.parse(text) as { result?: typeof result }).result ?? {};
+  } catch {
+    return { status: "unreadable", responseBytes: Buffer.byteLength(text) };
+  }
+  const sections = result.value?.sections;
+  return {
+    status: result.status,
+    resetReason: result.resetReason,
+    token: shortHash(result.token),
+    sentToken: typeof sent.knownToken === "string" ? shortHash(sent.knownToken) : null,
+    forceSnapshot: sent.forceSnapshot === true,
+    responseBytes: Buffer.byteLength(text),
+    ...(sections
+      ? {
+          sections: Object.fromEntries(
+            Object.entries(sections).map(([name, section]) => {
+              const value = section.value;
+              const summary =
+                value && typeof value === "object" && !Array.isArray(value)
+                  ? ((value as { summary?: Record<string, unknown> }).summary ?? undefined)
+                  : undefined;
+              const drift = summary?.drift as { unknownEvents?: unknown } | undefined;
+              return [
+                name,
+                {
+                  availability: section.availability,
+                  revision: section.revision,
+                  bytes: Buffer.byteLength(JSON.stringify(section)),
+                  valueHash: shortHash(value),
+                  ...(Array.isArray(value) ? { entries: value.length } : {}),
+                  ...(section.catalogue ? { catalogueHash: shortHash(section.catalogue) } : {}),
+                  ...(section.error ? { error: true } : {}),
+                  ...(summary
+                    ? {
+                        summary: Object.fromEntries(
+                          Object.entries(summary).map(([key, inner]) => [key, shortHash(inner)]),
+                        ),
+                      }
+                    : {}),
+                  ...(drift ? { unknownEvents: drift.unknownEvents } : {}),
+                },
+              ];
+            }),
+          ),
+        }
+      : {}),
+  };
+}
+
+/** Every discovery answer a page received, timed from the window's start. */
+function discoveryTimeline(requests: SessionRequest[], from: number, to: number) {
+  return requests
+    .filter((request) => request.discovery)
+    .map((request) => ({
+      atMs: request.at - from,
+      inWindow: request.at >= from && request.at < to,
+      wireBytes: request.wireBytes,
+      ...request.discovery,
+    }));
+}
 
 test.describe.configure({ mode: "serial" });
 test.use({ trace: "off" });
@@ -133,6 +227,12 @@ function recordSessionRequests(page: Page, logicalSessionKey: string): SessionRe
       if (!body.command || body.args?.logicalSessionKey !== logicalSessionKey) return;
       const at = Date.now();
       const sizes = await request.sizes();
+      let discovery: Record<string, unknown> | undefined;
+      if (body.command === "get_native_agent_discovery_update") {
+        const response = await request.response();
+        const text = response ? await response.text().catch(() => "") : "";
+        discovery = discoveryShape(text, body.args as { knownToken?: unknown });
+      }
       requests.push({
         at,
         command: body.command,
@@ -141,6 +241,7 @@ function recordSessionRequests(page: Page, logicalSessionKey: string): SessionRe
           sizes.requestBodySize +
           sizes.responseHeadersSize +
           sizes.responseBodySize,
+        ...(discovery ? { discovery } : {}),
       });
     })();
   });
@@ -385,6 +486,8 @@ test.describe("Requests of a visible running agent tab", () => {
         ...summarize(requests, from, to),
         gateway: commandDelta(before, after),
       });
+      record("running-quiet-discovery", { timeline: discoveryTimeline(requests, from, to) });
+      if (SKIP_RECONNECT) return;
 
       await expect(page.getByText(first.marker).first()).toBeVisible({
         timeout: TURN_DEADLINE_MS,
@@ -475,6 +578,10 @@ test.describe("Requests of a visible running agent tab", () => {
       };
       expect(viewers.second.requests, "the second page never read the session").toBeGreaterThan(0);
       record("running-quiet-two-viewers", { viewers, gateway: commandDelta(before, after) });
+      record("running-quiet-two-viewers-discovery", {
+        first: discoveryTimeline(first, from, to),
+        second: discoveryTimeline(secondRequests, from, to),
+      });
       await expect(second.getByText(turn.marker).first()).toBeVisible({
         timeout: TURN_DEADLINE_MS,
       });

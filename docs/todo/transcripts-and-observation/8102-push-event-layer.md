@@ -430,7 +430,10 @@ Against the expected result
   discovery. Discovery carried most of the live gateway response bytes.
   Its replies averaged 16.8 KB in the one-viewer run and 22.3 KB in the
   two-viewer run. The gateway aggregates leave individual response sizes
-  and the number of `unchanged` replies undetermined.
+  and the number of `unchanged` replies undetermined; the per-answer rerun
+  on mini split each window into one `unchanged` reply and one whole-view
+  snapshot of a real change
+  ([Discovery answers in a quiet running Claude tab](#discovery-answers-in-a-quiet-running-claude-tab-2026-11-28)).
 
 **Decisions.**
 
@@ -572,6 +575,71 @@ ORKESTRATOR_AGENT_TEST_PROFILE=push-baseline ORKESTRATOR_AGENT_TEST_RUN_ID=push-
 ```
 
 Stop and reset each profile afterwards (`dev:stop`, `dev:reset`).
+
+### Discovery answers in a quiet running Claude tab (2026-11-28)
+
+The real-Claude rerun of baseline A on beelink (task 7) recorded discovery
+answers averaging 16.8 KB with one viewer and 22.3 KB with two, against the
+few hundred bytes 8151 (retired) expected; the gateway's totals could not
+say how many were `unchanged`. Measured per answer on arktech-mini at `a8e5ea708`
+(7568's "8151 (retired) task 2" item, two billed Haiku turns, Claude CLI
+2.1.326, profile with `--no-host-seed --credential-source claude`), every
+window held one `unchanged` answer and one real change:
+
+| 40 s window | Discovery answers | `unchanged` | Snapshots | Bytes |
+| --- | --- | --- | --- | --- |
+| One viewer | 2 | 1 (481 B) | 1 (26,693 B) | 27,174 |
+| Two viewers, first | 2 | 1 (481 B) | 1 (26,693 B) | 27,174 |
+| Two viewers, second | 1 | 0 | 1 (26,693 B) | 26,693 |
+
+Beelink's totals fit the same split exactly: 33,670 = 481 + 33,189 and
+66,859 = 481 + 2 × 33,189 (its command catalogue is larger).
+
+- **What changed.** The first renewal after the view mounted (about 30 s
+  later, inside the window) found the turn's Claude CLI running: `mcp` went
+  from no servers to one (48 to 1,004 B) and `runtime` from `detached` to
+  `attached` with `runtimeGeneration` 1 (91 to 113 B). The renewal was
+  announced (`discovery-renewal`), so every viewer read once more, 80 ms after
+  the first viewer's own `unchanged` backstop. The second read per viewer is
+  that announcement, not a recovery or reconnect read.
+- **Why it was 26.7 KB.** A discovery snapshot is the whole view: `commands`
+  21,304 B (53 commands), `models` 3,699 B, `mcp` 1,004 B, `runtime` 113 B.
+  The 1.1 KB that changed resent 25 KB that had not.
+- **The token path works.** Every read sent the token it held and the backend
+  honoured it; an `unchanged` answer is token plus identity, 477 to 481 B
+  whatever the view's size (`progressive-discovery.ts`, `getDiscoveryUpdate`).
+- **Steady state.** On the loopback model (credential-free, same day, a turn
+  held in a `Bash` wait) the same change cost one 24 KB snapshot at the first
+  backstop, and every later backstop was `unchanged` (477 B): about 1 KB a
+  quiet minute per viewer. A whole view goes again on each runtime change a
+  view shows: a CLI launch, an idle detach, a change in the MCP server set or
+  the command catalogue.
+- **Mount bursts cost more than the quiet window.** Before its window the
+  first viewer made 13 discovery reads in 1.1 s, 10 of them snapshots
+  (127,260 B), while the catalogue settled (`loading`, `stale`, then two
+  revisions). The second viewer's mount made 3 identical `initial` snapshots
+  in 100 ms (77,608 B). Every round that is not a background round reads
+  discovery (`claimExplicit` in `useNativeAgentSession.ts`), and the read is
+  not joined with one already in flight, so overlapping mount rounds send
+  their reads without the token the first answer would have taught them.
+- **A latent case.** A renewal whose only change is the runtime drift counter
+  (`unknownEvents`) is stored and served but not announced
+  (`storeProgressiveDiscovery`; pinned by "does not announce a renewal whose
+  only change is the runtime drift counter" in `service-progressive.test.ts`).
+  The view's token then moves silently and the next 30 s backstop answers a
+  whole snapshot. No drift appeared in these runs.
+- **Scale and CPU.** An answer is one session's view, so it does not grow
+  with sessions, environments or projects; the total does with visible tabs
+  times viewers. It grows with installed commands and skills (about 400 B a
+  command) and MCP servers and their tool names (up to 512 servers). Building
+  one is a cached read plus a JSON serialization and a SHA-256 of the view: the
+  gateway timed 2 to 3 answers at 1 to 2 ms in total.
+
+`agent-tab-requests-live.spec.ts` now writes each discovery answer's shape
+(`running-quiet-discovery` and `running-quiet-two-viewers-discovery` in
+`agent-tab-requests.json`; content free), and
+`ORKESTRATOR_AGENT_TEST_TAB_REQUESTS_SKIP_RECONNECT=1` ends `running-quiet`
+after its window, one billed turn fewer.
 
 ## Outstanding work
 
@@ -1331,6 +1399,22 @@ Results are under task 7.
 - **Toolchain.** Host seeding copied the pinned Claude CLI into the profile,
   the documented path for `--credential-source`. No production binary or
   backend ran.
+
+### Task 7: the discovery bytes were read per answer on mini (2026-11-28)
+
+The coordinator asked whether the large discovery answers in the beelink
+rerun were a bug, allowing one billed run on arktech-mini only if a
+fake-model run could not tell. The loopback model reproduced one large
+snapshot and showed which sections moved, but it reports no MCP servers,
+commands or drift of its own, so it could not say what moved for real
+Claude; the billed run (two Haiku turns, reconnect turn skipped) did. The
+profile downloaded its own Claude CLI (`--no-host-seed`) and read the host
+login through `--credential-source claude` with every inherited
+`ORKESTRATOR_*`, `CLAUDE*` and `ANTHROPIC*` variable and `NODE_ENV` unset;
+nothing signed in or out and `~/.claude` was not written. The answer's
+shape is now recorded by the spec rather than by a side process, since the
+previous record could only divide totals by counts.
+Results: [Discovery answers in a quiet running Claude tab](#discovery-answers-in-a-quiet-running-claude-tab-2026-11-28).
 
 ### Task 4: Auto-pipeline rides the `workflow` topic with a digest (2026-11-19)
 

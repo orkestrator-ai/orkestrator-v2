@@ -3018,7 +3018,12 @@ measures two commits. Results are appended to
 `output/agent-testing/<run id>/agent-tab-requests.json`: command names, counts
 and byte totals, per round and per second, from both the page and the gateway's
 `/__orkestrator/metrics`. Add `--grep running-quiet` to run only the two
-`running-quiet` cases. The push event layer's before-measurement (to-do
+`running-quiet` cases. Each discovery answer is also recorded by shape (status,
+whether the sent token matched, and per section availability, revision, bytes
+and a short value hash), so a large answer names the section that moved.
+`ORKESTRATOR_AGENT_TEST_TAB_REQUESTS_SKIP_RECONNECT=1` ends `running-quiet`
+after its window, one billed turn fewer. The push event layer's
+before-measurement (to-do
 [8102](../todo/transcripts-and-observation/8102-push-event-layer.md#the-polling-baseline-2026-11-15))
 was taken with them and with the conditional-reads spec below.
 

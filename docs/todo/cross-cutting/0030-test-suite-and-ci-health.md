@@ -6,6 +6,8 @@ Checked against `main` at `bf49a751` (2026-10-25).
 
 Analysed 2026-11-07 against unified-federation-b4c9ee65814d at `ae492c20c`. The open tasks (1, 2 for 0672, 6 and 7) do not depend on realms and still apply. The done task 4 names `workspace-realm-electron.spec.ts`, which plan item 6003 deleted with workspace realms (node scopes replaced them, 6002 and 6003); that part of task 4 is obsolete, noted where the spec is named. Mentions of `RealmContexts` and realms in the dated Current state are history.
 
+Updated 2026-11-28 against `main` at `a8e5ea708`: on 2026-11-26 the user declined the required-check ruleset on `main` for now (7568, 0030 task 1; D21 under Assumptions and decisions), so task 6's two-week clock has not started.
+
 Previously analysed 2026-10-27 against `main` at `863b5782`. Tasks 2 to 5 worked on
 2026-10-31 against `main` at `931e5541` (see "Round of 2026-10-31" under
 Current state).
@@ -16,7 +18,7 @@ Current state).
 3. **Owner flake cases from the triage**: create the cases the 2026-10-25 triage suggested but did not number. Status: done (2026-10-31): 1530 to 1535; `media-stream.browser.test.ts` already had 1108.
 4. **Failures that are not flakes**: give `workspace-realm-electron.spec.ts:409`, the annotation Notes focus check, the `AgentLaunchDialog` branch suggestion and the 0723 exit-before-stderr race their own bug or todo. Status: done (2026-10-31): todos 1170, 1171 and 1172. The `workspace-realm-electron.spec.ts:409` part is obsolete since 6003 deleted the spec with realms (2026-11-07).
 5. **Live hung-`close()` Electron check**: run a real Electron spec whose `close()` hangs and confirm `closeElectronWithin` cleans up. Status: done (2026-10-31): `"killed"` after 20,066 ms, nothing left running.
-6. **Watch the workspace group margin and the runner shutdowns** (Needs verification). Status: blocked (waits on 7568: 0030 task 1; the shutdown item closes after the ruleset has been active for two weeks; the margin is currently comfortable).
+6. **Watch the workspace group margin and the runner shutdowns** (Needs verification). Status: blocked (waits on 7568: 0030 task 1, which the user declined for now on 2026-11-26; the shutdown item closes after the ruleset has been active for two weeks, a clock that has not started; the margin is currently comfortable).
 7. **Deferred measurement work**: ACP transcript matrix, longest-first bridge scheduling, splitting backend `test:workspace`, and any resumed speed work. Status: deferred (until measured).
 
 Item 1's evidence, items 2 to 6 and 8 to 10, and the flake triage are done; 0145 owns the stock-Ubuntu sandbox qualification.
@@ -298,6 +300,11 @@ one live check (an Electron spec with a hung `close()`).
      (0030 task 1) on 2026-11-10. The JSON, check-first, apply and verify
      commands below stay here: the checklist item points at them and
      `tests/unit/ci-workflows.test.ts` parses the JSON block.
+   - **Declined for now (2026-11-26).** The user does not want required CI
+     checks on `main` at present, so the ruleset is not applied and the
+     two-week clock for task 6 does not start. The checklist item stays open
+     for a later call; the prepared ruleset below is kept so it can be applied
+     unchanged if the user changes their mind (D21).
    - Required checks: `bun fmt and oxlint`, `Typecheck` and
      `Unit and integration tests` from `.github/workflows/ci.yml`, all reported
      by `github-actions` (app 15368). Rechecked on 2026-10-25 against the check
@@ -333,7 +340,8 @@ one live check (an Electron spec with a hung `close()`).
    }
    ```
 
-   - Check first: `gh run list --branch main --workflow ci.yml --limit 3`
+   - Proceed only after the user explicitly approves enabling the ruleset.
+     Then check that `gh run list --branch main --workflow ci.yml --limit 3`
      shows three `success` runs, and
      `gh api repos/orkestrator-ai/orkestrator-v2/rulesets` still returns `[]`.
    - Apply from a checkout of `main` that contains this file. The command
@@ -741,6 +749,19 @@ Decisions made on 2026-10-31 for tasks 2 to 5 and the register.
   names the files first, and a fixture proves disjoint reserved ranges above
   the highest number pass.
 
+Decision made on 2026-11-26 by the user.
+
+- **D21. Required checks on `main`: declined for now.** The user chose not
+  to apply the required-check ruleset at present. Options were applying it
+  once `main` had three green runs (the recommendation since 2026-10-15:
+  merges would wait on green checks, at the cost of a flake such as 0672
+  blocking merges) or not applying it for now (no merge blocking; a red
+  `main` is caught only by reading CI). Kept: the ruleset JSON, its
+  commands and the contract test that parses it, so applying it later needs
+  no new work. Task 6's shutdown watch cannot close on its two-week rule
+  until a ruleset is active; the checklist item (7568, 0030 task 1) stays
+  open as declined for now.
+
 ## Related
 
 - [Flake registry](../../tests/flaky-tests/0000-index.md); this round:
@@ -784,7 +805,7 @@ Decisions made on 2026-10-31 for tasks 2 to 5 and the register.
   `tests/unit/flaky-tests-index.test.ts` freezes exactly this set and fails on
   any new reuse, and a new case takes the next number after the highest in
   use.
-- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 1, applying the required-check ruleset) moved there on 2026-11-10.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 1, applying the required-check ruleset) moved there on 2026-11-10; the user declined it for now on 2026-11-26.
 
 ## Replaces
 

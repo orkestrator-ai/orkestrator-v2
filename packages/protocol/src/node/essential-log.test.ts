@@ -224,8 +224,8 @@ describe("the curated events", () => {
       area: "desktop",
       event: "quit.signal-received",
       level: "info",
-      fields: { signal: "SIGHUP", backendWaitMs: 3_000 },
-      kept: { signal: "SIGHUP", backendWaitMs: 3_000 },
+      fields: { signal: "SIGHUP", backendWaitMs: 3_000, quitAlreadyRequested: false },
+      kept: { signal: "SIGHUP", backendWaitMs: 3_000, quitAlreadyRequested: false },
     },
     {
       area: "backend",

@@ -1192,6 +1192,7 @@ export class BackendProcess {
   private client: BackendHttpClient | null = null;
   private info: GatewayStartInfo | null = null;
   private starting: Promise<BackendHttpClient> | null = null;
+  private startAbort: AbortController | null = null;
 
   async start(options: {
     isDev: boolean;
@@ -1226,8 +1227,10 @@ export class BackendProcess {
   }): Promise<BackendHttpClient> {
     if (this.client) return this.client;
     if (this.starting) return this.starting;
+    this.startAbort = new AbortController();
     this.starting = this.launch(options).finally(() => {
       this.starting = null;
+      this.startAbort = null;
     });
     return this.starting;
   }
@@ -1344,6 +1347,7 @@ export class BackendProcess {
         desktopLog.warn("backend.keychain-link-remove-failed", { error: formatLogError(error) });
       });
     }
+    this.startAbort?.signal.throwIfAborted();
     const child = spawn(bun, args, { env, stdio: ["ignore", "pipe", "pipe"] });
     this.child = child;
     // `exit` can precede the last stdout/stderr lines. Keep the drain wait
@@ -1473,6 +1477,7 @@ export class BackendProcess {
 
   /** Sends SIGTERM; resolves after exit and delivery of the final stdio lines. */
   stop(): Promise<void> {
+    this.startAbort?.abort();
     const child = this.child;
     this.client?.stopListening();
     this.client = null;

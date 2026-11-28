@@ -34,6 +34,7 @@
     "./node/bounded-line-splitter": "./src/node/bounded-line-splitter.ts",
     "./node/essential-log": "./src/node/essential-log.ts",
     "./node/host-cpu-times": "./src/node/host-cpu-times.ts",
+    "./node/process-owner-lock": "./src/node/process-owner-lock.ts",
     "./node/process-failure-log": "./src/node/process-failure-log.ts",
     "./node/log-policy": "./src/node/log-policy.ts",
     "./node/bridge-log-policy": "./src/node/bridge-log-policy.ts",

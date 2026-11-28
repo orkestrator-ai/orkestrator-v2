@@ -3,11 +3,12 @@ import { mkdirSync, readdirSync, renameSync, rmdirSync } from "node:fs";
 import path from "node:path";
 
 /** Self-contained so the identical lock runs in the I/O worker and exit fallback. */
-export function essentialLogLockFactory(
+export function processOwnerLockFactory(
   fs: Pick<typeof import("node:fs"), "mkdirSync" | "readdirSync" | "renameSync" | "rmdirSync">,
   path: typeof import("node:path"),
   randomUUID: () => string,
   directory: string,
+  name: string,
 ): () => (() => void) | null {
   const { mkdirSync, readdirSync, renameSync, rmdirSync } = fs;
   const OWNER = /^(\d+)-[0-9a-f-]{36}$/;
@@ -40,17 +41,18 @@ export function essentialLogLockFactory(
    */
 
   const token = `${process.pid}-${randomUUID()}`;
-  const lock = path.join(directory, ".writer-lock");
-  const stage = path.join(directory, `.writer-stage-${token}`);
+  const lock = path.join(directory, `.${name}-lock`);
+  const stagePrefix = `.${name}-stage-`;
+  const stage = path.join(directory, stagePrefix + token);
 
   return () => {
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     // Clean interrupted publications; only our empty, dead-process directories.
     const names = readdirSync(directory);
-    if (names.length > 1024) throw new Error("Essential log directory entry bound exceeded");
+    if (names.length > 1024) throw new Error("Process lock directory entry bound exceeded");
     for (const name of names) {
-      if (!name.startsWith(".writer-stage-")) continue;
-      const owner = name.slice(".writer-stage-".length);
+      if (!name.startsWith(stagePrefix)) continue;
+      const owner = name.slice(stagePrefix.length);
       const match = OWNER.exec(owner);
       if (match && !alive(Number(match[1]))) {
         removeEmpty(path.join(directory, name, owner));
@@ -92,11 +94,12 @@ export function essentialLogLockFactory(
   };
 }
 
-export function createEssentialLogLock(directory: string): () => (() => void) | null {
-  return essentialLogLockFactory(
+export function createProcessOwnerLock(directory: string, name: string): () => (() => void) | null {
+  return processOwnerLockFactory(
     { mkdirSync, readdirSync, renameSync, rmdirSync },
     path,
     randomUUID,
     directory,
+    name,
   );
 }

@@ -1,6 +1,6 @@
 import { installFatalRejectionGuard } from "../fatal-rejections.js";
 import { Worker } from "node:worker_threads";
-import { essentialLogLockFactory } from "./essential-log-lock.js";
+import { processOwnerLockFactory } from "./process-owner-lock.js";
 import { essentialLogTransactionFactory } from "./essential-log-transaction.js";
 import type { EssentialLogBounds } from "./essential-log.js";
 
@@ -13,8 +13,8 @@ export function createEssentialLogWorker(directory: string, bounds: EssentialLog
     (${installFatalRejectionGuard.toString()})({ label: "[essential-log-worker]" });
     const fs = require("node:fs");
     const path = require("node:path");
-    const tryLock = (${essentialLogLockFactory.toString()})(fs, path,
-      require("node:crypto").randomUUID, workerData.directory);
+    const tryLock = (${processOwnerLockFactory.toString()})(fs, path,
+      require("node:crypto").randomUUID, workerData.directory, "writer");
     const write = (${essentialLogTransactionFactory.toString()})(fs, path,
       workerData.directory, workerData.bounds);
     parentPort.on("message", ({ payload, state }) => {

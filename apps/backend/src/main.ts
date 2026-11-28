@@ -17,6 +17,7 @@ import {
 import { createManagedWebClient } from "./managed-web-client.js";
 import { assertSupportedPlatform, parseOptions } from "./options.js";
 import { createBackendExitHandler } from "./shutdown.js";
+import { acquireDesktopBackendOwnership } from "./desktop-backend-ownership.js";
 import { startReparentWatchdog } from "@orkestrator/protocol/parent-watchdog";
 import { installFatalRejectionGuard } from "@orkestrator/protocol/fatal-rejections";
 import { TailscaleServeManager } from "./tailscale-serve.js";
@@ -66,9 +67,8 @@ assertSupportedPlatform();
 const boundedConsole = installBoundedConsole();
 // Before standalone logging clears the flag: the desktop reads this process's
 // stdio and needs each logger entry's level (docs/architecture/logging.md).
-configureLoggerFromEnvironment(process.env, {
-  relayToSupervisor: process.env[DESKTOP_SUPERVISED_ENV] === "1",
-});
+const desktopSupervised = process.env[DESKTOP_SUPERVISED_ENV] === "1";
+configureLoggerFromEnvironment(process.env, { relayToSupervisor: desktopSupervised });
 // A stall line says how much CPU this process used during it: near the stall's
 // length means its own thread was busy, far below means it waited.
 // The host's CPU time counters stop while it sleeps, so a sleep is reported as
@@ -106,6 +106,7 @@ startupProgress("process");
 // Establish persistence before any fallible startup await (including toolchain
 // lease inspection). Supervised backends still relay to their desktop owner.
 const standaloneLogging = installStandaloneBackendLogging(options);
+if (desktopSupervised) await acquireDesktopBackendOwnership(options.dataDir);
 await mkdir(options.dataDir, { recursive: true });
 loadAgentTestHostCursorApiKey({
   dataDir: options.dataDir,

@@ -94,18 +94,15 @@ Updates → Channel**, then updates as usual.
    [Linux build from the Mac](#linux-build-from-the-mac). An agent cutting a
    release runs this itself rather than asking the maintainer to.
 
-4. From either machine, once both have finished:
+4. From either machine, once both builds have finished, publish from the tagged
+   checkout while npm trusted publishing is deferred:
 
    ```bash
-   mise run release:publish
+   mise run release:publish -- --npm-local
    ```
 
-   It dispatches the "Publish npm package" workflow and waits for it (see
-   [Publishing the npm package from GitHub](#publishing-the-npm-package-from-github)).
-   The workflow's deployment needs one approval on GitHub, and a desktop
-   notification says when. `mise run release:publish -- --npm-local`
-   publishes from this machine instead (see
-   [npm authentication](#npm-authentication-from-this-machine)).
+   This publishes the npm package from that machine before making the release
+   public. See [npm authentication](#npm-authentication-from-this-machine).
 
 5. After a **Stable** release only, pin the installer to it and merge the change
    through a pull request:
@@ -151,8 +148,7 @@ pins of the release. A running Orkestrator reads it after a check to show what
 an update would change. Before it makes a release public, `release:publish`
 publishes the `orkestrator` npm package at the same version under the
 channel's dist-tag, so standalone services and desktop apps update to the same
-release, by running the "Publish npm package" workflow on GitHub. The step is
-skipped when the version is already on npm. Pass
+release. It skips npm publishing when the version is already on npm. Pass
 `mise run release:publish -- --skip-npm` to leave npm alone.
 
 The package carries the lockfile standalone services install its dependencies
@@ -166,11 +162,16 @@ dependency of `packages/cli`, or to take a transitive security fix;
 
 ### Publishing the npm package from GitHub
 
+The maintainer deferred trusted publishing on 2026-11-26. Use
+`mise run release:publish -- --npm-local` while it is deferred and keep tokens
+allowed. The GitHub procedure below applies once the maintainer resumes
+trusted publishing and completes both setup steps.
+
 The desktop builds stay on the maintainer's machines. Only the npm package is
 published by GitHub Actions, through
 [`.github/workflows/publish-npm.yml`](../../.github/workflows/publish-npm.yml),
-with npm trusted publishing (the job's OIDC identity) and provenance. No npm
-token exists on a workstation or in GitHub, and npm's page for each version
+with npm trusted publishing (the job's OIDC identity) and provenance. The
+workflow uses no npm token, and npm's page for each version published this way
 names the commit and workflow it was built by.
 
 `release:publish`, once it has checked that both desktop builds are on the
@@ -204,8 +205,9 @@ lose. Anyone who can push a branch can dispatch the workflow from it; the
 workflow runs only from `main`, and the `npm-publish` environment may deploy
 only from `main`, which is what stops another branch's copy publishing.
 
-**One-time setup, which only a maintainer can do** (it is a checklist item in
-the [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)):
+When the maintainer resumes trusted publishing, complete this one-time setup
+before the first workflow run. See task 5021 in the
+[manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md).
 
 - **GitHub:** create the `npm-publish` environment (Settings → Environments)
   before the first run, because GitHub otherwise creates a missing environment
@@ -226,12 +228,6 @@ the [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)):
   publishing access to require two-factor authentication and disallow tokens,
   so only the workflow can publish.
 
-The maintainer deferred this setup on 2026-11-26 (the checklist item stays
-open as deferred). Until both settings exist, npm has no trusted publisher
-for the workflow to authenticate as, so publish with `--npm-local` (below).
-Tokens stay allowed on the package; the "disallow tokens" step waits for the
-setup.
-
 If the project moves to another GitHub repository, update the trusted
 publisher entry and the `repository` field of `packages/cli/package.json`
 together: npm checks the repository, workflow file name and environment of every
@@ -243,9 +239,10 @@ from GitHub-hosted runners.
 
 ### npm authentication from this machine
 
-`mise run release:publish -- --npm-local` (or `mise run publish:cli`) publishes
-with `bun publish` from the machine that runs it, as the fallback for a day
-when GitHub Actions is unavailable. It carries no provenance. The script keeps
+`mise run release:publish -- --npm-local` (or `mise run publish:cli` for the
+npm step alone) publishes with `bun publish` from the machine that runs it.
+This is the active path while trusted publishing is deferred. It carries no
+provenance. The script keeps
 no npm token on disk (a token file is no longer read). It authenticates in one
 of two ways.
 
@@ -278,24 +275,22 @@ other failure is not retried.
 
 ### Running `release:publish` as an agent
 
-An agent running `mise run release:publish` should:
+While trusted publishing is deferred, an agent should:
 
-- start `mise run release:publish 2>&1; echo "EXIT=$?"` as a background task
+- start `mise run release:publish -- --npm-local 2>&1; echo "EXIT=$?"` as a background task
   (the `EXIT=` line is the status: a background task reports success even when
   the publish failed);
-- wait for the line `npm publish workflow: waiting`, which carries the run's
-  address and means the deployment needs a reviewer, with a bounded poll of
-  the output, for example
-  `for i in $(seq 1 80); do grep -qE 'workflow: waiting|EXIT=' "$F" && break; sleep 3; done`;
-- give the address to the user straight away (the desktop notification has
-  already fired on the publishing machine), and wait for `EXIT=` with another
-  bounded poll or by ending the turn. A worker under an Orkestrator
-  coordinator sends the address to the coordinator and ends its turn at once,
-  because mail sent mid-turn is held until the turn ends.
+- use a bounded poll for `npmjs.com/auth|EXIT=`. If npm asks for browser
+  approval, give the sign-in URL to the user promptly and pass on each fresh
+  URL a retried attempt prints;
+- check `EXIT=` to confirm the outcome.
 
-With `--npm-local` and no token the wait is for npm's sign-in link instead:
-poll for `npmjs.com/auth|EXIT=`, give the user the URL, and pass on the fresh
-URL a retried attempt prints.
+Once trusted publishing resumes and both setup steps are complete, start
+`mise run release:publish 2>&1; echo "EXIT=$?"` as a background task and use a
+bounded poll for `workflow: waiting|EXIT=`. Send the workflow run address to
+the user promptly when the deployment is waiting for approval. A worker
+under an Orkestrator coordinator sends an approval URL to the coordinator and
+ends its turn so the coordinator receives the mail promptly.
 
 Do not pipe input into the command (such as `sleep 900 | mise run
 release:publish`). The pipeline outlives the publish, so `EXIT=` is not written

@@ -208,10 +208,12 @@ derives that list from the built artifacts, so adding a dependency the bundles d
 not resolve — or bumping one in `apps/backend` or `bridges/` without mirroring it
 here — fails the suite.
 
-Releases publish this package through the "Publish npm package" GitHub
-workflow, which `mise run release:publish` starts (see
-[releasing.md](../../docs/development/releasing.md#publishing-the-npm-package-from-github)).
-From a workstation, as the fallback:
+While trusted publishing is deferred, releases publish this package from a
+workstation with `mise run release:publish -- --npm-local`. Once trusted
+publishing is set up, `mise run release:publish` starts the "Publish npm
+package" GitHub workflow. See [releasing.md](../../docs/development/releasing.md#publishing-the-npm-package-from-github).
+
+For the npm step alone on a workstation:
 
 ```bash
 mise run publish:cli

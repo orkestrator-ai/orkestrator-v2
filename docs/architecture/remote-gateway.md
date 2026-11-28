@@ -172,10 +172,16 @@ An existing service on a custom data directory that was installed without
 `--port` keeps its arguments across a self-update, so after updating to a
 release with this rule it takes a free port and a saved direct tailnet address
 such as `http://100.x.y.z:34121` stops connecting. Reinstall it from host-side
-access (for example SSH) with the same data directory and serve flags plus a
-port other than 34121 or 34122, for example
-`bunx orkestrator service install --data-dir /path/to/data --yes -- --host 100.x.y.z --port 45000 --strict-gateway-port`,
-and update saved remote connections to the address the installer prints.
+access (for example SSH) using the exact version the service just updated to,
+including its prerelease suffix if present. Use the same data directory and
+serve flags plus a port other than 34121 or 34122. Replace
+`<installed-version>` with that exact version:
+
+```bash
+bunx orkestrator service install --release "<installed-version>" --data-dir /path/to/data --yes -- --host 100.x.y.z --port 45000 --strict-gateway-port
+```
+
+Update saved remote connections to the address the installer prints.
 Releases carrying the rule shipped without a release note about it; the user
 decided on 2026-11-28 not to publish one.
 

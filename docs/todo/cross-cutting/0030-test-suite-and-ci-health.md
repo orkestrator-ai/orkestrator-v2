@@ -340,7 +340,8 @@ one live check (an Electron spec with a hung `close()`).
    }
    ```
 
-   - Check first: `gh run list --branch main --workflow ci.yml --limit 3`
+   - Proceed only after the user explicitly approves enabling the ruleset.
+     Then check that `gh run list --branch main --workflow ci.yml --limit 3`
      shows three `success` runs, and
      `gh api repos/orkestrator-ai/orkestrator-v2/rulesets` still returns `[]`.
    - Apply from a checkout of `main` that contains this file. The command

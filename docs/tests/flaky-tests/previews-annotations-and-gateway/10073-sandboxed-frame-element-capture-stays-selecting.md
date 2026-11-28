@@ -33,9 +33,12 @@ from `apps/desktop` passed: 13 pass, 0 fail.
 ## Recurrence on PR #2583 (2026-11-28)
 
 - **Host:** GitHub Actions `ubuntu-latest`, job `Tests (workspace)`
-  (job 140803162068) of CI run 46088355590.
+  ([job 140803162068](https://github.com/orkestrator-ai/orkestrator-v2/actions/runs/46088355590/job/140803162068)) of CI run 46088355590.
 - **Observing head:** `bc22606c2` (PR #2583).
 - **Observing branch base:** `36cdf8860`.
+- **Failing command:** `ORKESTRATOR_TEST_GROUPS=workspace mise run test:full`,
+  with one workspace scheduler slot and one Bun worker for the desktop task
+  (`1x PARALLEL`). The workspace group reported 25892 pass, 1 fail and 50 skip.
 - **Recurrence check:**
   `mise run flaky:recurrence -- 10073 --base 36cdf8860 --registry-ref origin/main`
   answered "open. Record the failure as a recurrence".
@@ -47,9 +50,10 @@ helper, with the same status:
 not selected: {"v":1,"captureId":"capture-13","nonce":"nonce-1","mode":"element","status":"selecting"}
 ```
 
-The owning file passed when rerun alone, in 5.6 s. The duration again matches
-the length of the status poll, so this adds no evidence about whether the click
-was delivered late or missed the frame.
+The runner reran the owning file alone with one worker slot, and it passed in
+5.6 s. The failure duration again matches the length of the status poll, so
+this adds no evidence about whether the click was delivered late or missed the
+frame.
 
 ## Assessment
 

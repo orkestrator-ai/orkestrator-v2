@@ -4,7 +4,8 @@
 
 Analysed 2026-11-06 against `main` at `c1724ab74`; re-analysed 2026-11-15
 against `main` at `a8b89f154`, when task 2 was done with a loopback Cursor
-backend. Left by to-do 6100, which
+backend; updated 2026-11-28 against `main` at `a8e5ea708`, when the user
+decided task 3. Left by to-do 6100, which
 removed `sentry.io`, `statsig.anthropic.com` and `statsig.com` from the
 default allowlist after Claude Code, Codex, OpenCode and Pi each finished
 turns against a fake provider without them
@@ -14,6 +15,7 @@ turns against a fake provider without them
 
 1. **Run a Grok turn without the telemetry hosts**: a Grok Build turn in a restricted container with the three hosts refused, against a fake provider. Status: done. (Review follow-up, 2026-11-06.)
 2. **Settle Cursor without a turn or with a real one**: decide whether the static evidence is enough for the Cursor SDK, or run one real turn. Status: done (2026-11-15, a Cursor SDK turn against a loopback fake Cursor backend in a restricted container).
+3. **Release-note line for the removed telemetry hosts**: tell existing installs that new installs no longer allow the three hosts. Status: done (2026-11-28: the user decided not to publish the note).
 4. **Record native arm64 qualification**: capture the telemetry-host suite result on the workflow's linux-arm64 runner. Status: blocked (waits on a Container live qualification run on linux-arm64).
 
 ### 1. Run a Grok turn without the telemetry hosts
@@ -116,6 +118,31 @@ credential and no real Cursor request was used. Details are in
     - Pros: an observed turn through the image's own SDK copy with the hosts refused, no login and nothing billed; repeatable in CI beside the other CLIs, and an SDK bump that changes the protocol fails the suite instead of passing silently.
     - Cons: the fake depends on Cursor's undocumented RPC names and field numbers, so an SDK bump may need the fake updated; it exercises the local agent's turn, not cloud agents or tool calls.
 
+### 3. Release-note line for the removed telemetry hosts
+
+**Problem.** Existing installs keep `sentry.io`, `statsig.anthropic.com` and
+`statsig.com` in their stored allowlists, because a stored user list is never
+narrowed to match the defaults, so only a release note would have told those
+users they can remove them.
+
+**Context.** The line was a human-only item in the
+[manual-test checklist](../manual-test/7568-manual-test-checklist.md) from
+2026-11-10, to be added when cutting the next release. Releases up to and
+including 2.39.15-beta shipped without it.
+
+**Investigation.** None needed: this was a release-notes call reserved to
+the user.
+
+**Decisions.**
+
+- **Publish the line in a release's notes?**
+  - **Publish it in the next release's notes.**
+    - Pros: users with a stored allowlist learn they can close the channel.
+    - Cons: several releases have already shipped without it, so it would arrive late and few would read it.
+  - **Do not publish it (recommended; the user's decision, 2026-11-28).**
+    - Pros: no stale note; the change stays recorded in the default list (`DEFAULT_ALLOWED_DOMAINS`, `packages/protocol/src/network-allowlist.ts`) and the [qualification record](../../development/container-qualification.md#agent-clis-without-telemetry-hosts-on-rootful-linux-engine-2026-11-06).
+    - Cons: an existing install keeps the three hosts until its user removes them in Settings.
+
 ### 4. Record native arm64 qualification
 
 **Problem.** The telemetry-host suite is scheduled on both Linux architectures,
@@ -186,6 +213,14 @@ protocol change on either side fail the suite. On omarchy-hp with image
 `BidiAppendRequest` field number temporarily changed in the fake, the Cursor
 turn failed with that error, as intended.
 
+### Task 3: no release note (2026-11-28)
+
+The user decided on 2026-11-28 not to publish the release-note line: 2.39.15-beta
+and earlier releases shipped without it, and nobody would read it now. Task 3
+is done as decided, and its checklist item is ticked with the decision.
+Existing allowlists are unchanged; a user who wants the channel closed removes
+the hosts in Settings.
+
 ### Task 4: require observed native execution (unchanged 2026-11-15)
 
 Keep arm64 qualification open until the existing native CI job supplies a
@@ -199,4 +234,4 @@ with the Cursor turns, is the evidence this task waits on.
 
 - [6101](6101-egress-name-checks-platform-coverage.md); 6102 (retired 2026-11-11), whose name-check limits are in [container lifecycle](../../architecture/container-lifecycle.md#name-checks-egress-filter1)
 - Security report, M12 (`git show 413bd6219:docs/reports/2-26-10-27-security.md`)
-- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 3, the release-note line for existing installs) moved there on 2026-11-10.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (task 3, the release-note line for existing installs) moved there on 2026-11-10; the user decided task 3 on 2026-11-28 (no note).

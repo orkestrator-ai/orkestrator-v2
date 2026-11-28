@@ -1236,6 +1236,116 @@ spend credits, but it is not a full real-CLI smoke test. Before release, start a
 local and a container Claude native session with the new managed CLI and verify
 streaming, questions, abort, resume, model discovery, and a background task.
 
+### Signed-in checks at the 2026-11-28 pins
+
+Run on 2026-11-28 on mbp3 (macOS 27.2, arm64) against `main` at `a2fd20d91`,
+with the user's approval for billed turns. It covered 1020 (retired) task 9's
+signed-in part, 1031 (retired) task 9's signed-in part and 1031 tasks 10 to
+15, in one disposable profile, `qa-signin-batch`:
+
+- Started with `mise run dev:test --fixture --fixture-environments
+  local,container --headless --no-host-seed`, every credential source, and
+  `ORKESTRATOR_HOST_REACHABILITY_CHECK=off` (no step needed container
+  reachability). It was stopped and reset afterwards.
+- Pins: Agent SDK 0.3.326 and managed CLI 2.1.326, Codex 0.169.0, OpenCode
+  2.3.1, Pi 1.5.2, Cursor SDK 1.4.1 and Grok 1.0.88.
+- Logins: Claude, Codex, OpenCode and Pi were signed in. Cursor had no valid
+  login and Grok's had expired (see their sections).
+- Evidence, git-ignored on mbp3: `output/qa-batch/`,
+  `output/agent-testing/qa-signin-*/` and screenshots in
+  `output/visual-previews/`.
+
+Billed: about 43 Claude turns, on haiku unless stated otherwise.
+
+- **Release check, local session** (1020 task 9 step 5): pass.
+  - Streaming: a three-line reply.
+  - A question: an AskUserQuestion card, answered with `session interactions
+    resolve`.
+  - Abort: stopped during a 60 s foreground `ping`. The stop was
+    acknowledged, the session was idle within 3 s, and the transcript read
+    "Interrupted by user". 2.1.326 itself refused a foreground `sleep 90`,
+    proposing a background run, hence `ping`.
+  - Resume: a new tab resumed the conversation from `session history` and
+    answered its codeword.
+  - Model discovery: a live catalogue of default, opus, fable, sonnet and
+    haiku.
+  - A background task: a `run_in_background` Shell card reached Completed, and
+    the CLI woke the model with the result.
+- **Release check, container session** (`fixture-container`, host login synced
+  over stdin): pass for the same six. The image has no `ping`, so the abort
+  used a 60 s `node` timer. The first prompt straight after `session resume`
+  ended `ok: false` with no error and left no transcript row. The same prompt
+  sent again answered the codeword. This was not reproduced.
+- **Coordinator-skills probe** (1031 task 9 step 1): pass in both scenarios
+  (Skill tool and typed slash command). Every marker stayed absent, the
+  bridge's PreToolUse hook denied `touch`, and `project-skills:probe-skill`
+  loaded. It ran with a temporary `CLAUDE_CONFIG_DIR` and the host access
+  token as `ANTHROPIC_AUTH_TOKEN`, so nothing wrote to `~/.claude`.
+- **Model and effort switch, sub-agent card, compaction** (1031 task 9
+  step 3): pass.
+  - The switch from haiku/high to sonnet/low applied, and the next reply was
+    labelled `claude-sonnet-5-5`.
+  - An Explore sub-agent card reached Completed.
+  - `/compact` added "Context compacted · manual compaction".
+- **Goal suite** (1031 task 9 step 4), Claude only: pass (111.8 s, 1 passed, 0
+  skipped). The run was the "every scenario" test of `goals-live.spec.ts` on
+  haiku: a passing check completed after 2 iterations, no check ended claimed,
+  the cap ended limited at 2, blocked, Stop paused, resume completed, and a
+  queued prompt ended claimed. It ran against this profile, not through
+  `mise run test:agent:goals`, whose per-platform profiles seed from the real
+  data directory. Not run, to stay inside the turn budget: the spec's other
+  tests (Plan mode and token limits, compaction and verifier, provider
+  offer, browser) and the other platforms.
+- **Task 10, sign-in expiry:** not shown. Under the agent-test route the
+  bridge runs on an access-only `ANTHROPIC_AUTH_TOKEN` (`apiKeySource: none`;
+  Agent Info offers "Add an account"). A direct SDK turn on the same route got
+  a result with `result_index: 0` and no `credential_expires_at`. The line
+  needs a stored claude.ai login in a throwaway config directory, which means
+  signing in, so it was not attempted.
+- **Task 11, "answer this yourself" card:** not shown; bug candidate. A user
+  `permissions.ask` rule (`Bash(echo:*)` in the profile's own Claude
+  settings) gave, under an Ask policy, the ordinary card with "Approve and
+  remember…" (`qa-claude-ask-rule-card.png`). With approvals off, the
+  rule-forced call ran with no card. A direct SDK probe at 2.1.326 showed
+  why:
+  - `canUseTool` is called for the rule in both `default` and
+    `bypassPermissions` mode.
+  - The call carries `decisionReasonType: "rule"`, which `sdk.d.ts` does not
+    declare.
+  - It has no `matchedAskRule`: `sdk.d.ts` documents that field only when the
+    tool also has its own decision reason.
+  - `suppressAlwaysAllowRule` is unset.
+
+  The bridge reads only the two documented fields
+  (`session-manager-parked-interactions.ts`). A plain ask rule therefore stays
+  rule-eligible, and with approvals off the bridge allows it.
+- **Task 12, tool hints:** pass. A stdio MCP server in the profile's user
+  configuration declares `wipe_scratch` with `destructiveHint: true`
+  (`output/qa-batch/scripts/hint-mcp.ts`). Its card read "Requested by MCP
+  server qa-hints · from user settings" with a Destructive tag
+  (`qa-claude-mcp-approval-card.png`).
+- **Task 13:** no billed cost to read. Claude's cost shows as an estimate
+  ("~$0.0053, estimated" in Agent Info).
+- **Task 14, lost write on a full disk:** pass.
+  - Setup: a 120 MB APFS image mounted under `output/qa-batch/mnt` with
+    `nobrowse`, with only the `qa-full` environment's
+    `projects/<slug>` linked onto it, then filled with `dd`.
+  - The second turn's lines never reached the rollout.
+  - When the warm CLI exited at the end of its 10-minute idle window, the
+    transcript gained the amber line "This conversation could not be fully
+    saved. Resuming it may miss recent messages."
+  - The line was still there on a fresh page load
+    (`qa-claude-full-disk-notice.png`). The turn footer then read "Completed in
+    10m 1s".
+  - The image was detached and deleted.
+- **UI bug candidate, two tabs on one conversation.** `orkestrator session
+  resume` bound a second tab to a conversation that an open tab still held.
+  The CLI drove both tabs. The second tab rendered "Connection failed: Native
+  agent session provider collision", unchanged after Retry and a reload. The
+  first tab showed the turns sent through the second
+  (`qa-claude-switch-subagent-compact.png`,
+  `qa-claude-tab1-after-resume.png`).
+
 Upstream references: [Claude Code](https://github.com/anthropics/claude-code)
 and [Claude Agent SDK TypeScript](https://github.com/anthropics/claude-agent-sdk-typescript).
 Upstream now recommends its native installer for ordinary user installs, but
@@ -1763,6 +1873,38 @@ the pinned binary's parser over the production argument shape.
    update them only when the assertion is intended to represent the current
    binary.
 
+### Signed-in checks at the 2026-11-28 pins (Codex)
+
+From the 2026-11-28 signed-in run on mbp3 (see the Claude section's [signed-in checks](#signed-in-checks-at-the-2026-11-28-pins) for the profile, pins and evidence). Codex 0.169.0 on the host's ChatGPT login (the profile's
+access-only snapshot). Billed: 7 Codex turns, plus one sub-agent child turn.
+
+- **Web-search canary** (1020 (retired) task 9 step 3): pass (33.1 s).
+  `live-network-lock.test.ts` with `RUN_LIVE_CODEX_APP_SERVER=1
+  RUN_LIVE_CODEX_WEB_SEARCH_CANARY=1`, the profile's managed binary as
+  `CODEX_PROTOCOL_BINARY` and its restricted `CODEX_HOME`, so the canary
+  copied the snapshot, not `~/.codex/auth.json`.
+- **Rollout user-segment scan of the real `~/.codex/sessions`** (1020 step 4):
+  not run; reading `~/.codex` needs the user's OK.
+- **Tool hints on an MCP approval** (1031 (retired) task 12): pass. A stdio
+  MCP server added to the profile's own `CODEX_HOME/config.toml` declares
+  `wipe_scratch` with `destructiveHint: true`. On `gpt-5.6-luna`, in an
+  environment under an Ask policy, the card read "MCP server needs input ·
+  Allow the qa-hints MCP server to run tool "wipe_scratch"?" with a
+  Destructive tag (`qa-codex-mcp-approval-card.png`).
+- **Model and effort switch, sub-agent card, compaction** (1031 task 9 step 3):
+  the switch from `gpt-5.6-luna`/low to `gpt-6-luna`/medium applied and the
+  next reply was labelled GPT-6-Luna. A `spawn_agent` child showed as an
+  "AGENT Euclid · Finished" card, and its reply was relayed. **Compaction
+  failed (bug candidate).** `/compact` held the session for the bridge's
+  five-minute backstop (`DEFAULT_COMPACTION_TIMEOUT_MS`), then ended with "Turn
+  failed: Codex never reported that compaction finished. The session was
+  released." No compaction row was written, and `session prompt --wait` timed
+  out at five minutes. The bridge ends a compaction only on
+  `thread/compacted`, which the 0.169.0 generated protocol marks "Deprecated:
+  Use `ContextCompaction` item type instead"
+  (`ContextCompactedNotification.ts`). Whether 0.169.0 still sends it was not
+  checked. Screenshot: `qa-codex-compact-failed-details.png`.
+
 See `docs/architecture/agent-engines.md` for the architectural and
 safety constraints behind this process. Upstream release source:
 [OpenAI Codex](https://github.com/openai/codex).
@@ -1954,6 +2096,24 @@ not set `OPENCODE_DISABLE_CLAUDE_CODE`, so the user's own
 `~/.claude/CLAUDE.md` (on the host, and the copy a container stages) reaches
 OpenCode sessions whose global configuration has no `AGENTS.md`. The
 `real-stack` and `container` halves were not re-run for 2.3.1.
+
+### Signed-in checks at the 2026-11-28 pins (OpenCode)
+
+From the 2026-11-28 signed-in run on mbp3 (see the Claude section's [signed-in checks](#signed-in-checks-at-the-2026-11-28-pins) for the profile, pins and evidence). OpenCode 2.3.1 on the host's `opencode` and `opencode-go` API keys.
+Billed: 5 OpenCode turns, plus one sub-agent child turn.
+
+- **`close-retention-live.spec.ts`** (1031 (retired) task 9 step 2): pass
+  (17.9 s, `opencode-go/deepseek-v4.1-flash`). After the close, the reload and
+  the resume, the reply proved the same conversation continued. Results:
+  `output/agent-testing/qa-signin-close/browser/results.json`.
+- **Model and effort switch, sub-agent card, compaction** (1031 task 9 step 3):
+  all pass. The switch from `deepseek-v4.1-flash`/low to `opencode-go/hy4`/high
+  applied. A task-tool sub-agent card appeared, and its "pong" was relayed.
+  `/compact` added a compaction row.
+- **`slash-command-inactive.spec.ts`** (1020 (retired) task 9 step 3): not run.
+  The spec supports only `codex` and `claude`
+  (`ORKESTRATOR_AGENT_TEST_SLASH_PROVIDERS`), so it cannot run for OpenCode,
+  Cursor, Grok or Pi as the item asks.
 
 Upstream references: [OpenCode releases](https://github.com/anomalyco/opencode/releases)
 and [OpenCode SDK documentation](https://opencode.ai/docs/sdk/).
@@ -2220,6 +2380,37 @@ summary fails. On upgrade, check the new SDK's `navigateTree` and
    still reports correctly for at least one signed-in and one signed-out
    provider.
 
+### Signed-in checks at the 2026-11-28 pins (Pi)
+
+From the 2026-11-28 signed-in run on mbp3 (see the Claude section's [signed-in checks](#signed-in-checks-at-the-2026-11-28-pins) for the profile, pins and evidence). Pi 1.5.2, with the host's `openai-codex` subscription login and its
+`opencode-go` key. Billed: 8 Pi turns. `--wait` exits 7 on every Pi turn with
+"Completion of pi runs is not qualified", as `public-api/providers.ts` intends.
+That is not a turn failure.
+
+- **Signed-in session and `close-retention-live.spec.ts`** (1031 (retired)
+  task 9 step 2): pass (14.5 s, `openai-codex/gpt-5.6-luna`).
+- **Model and effort switch** (1031 task 9 step 3): pass. The switch from
+  `gpt-5.6-luna`/low to `openai-codex/gpt-6-luna`/minimal applied.
+  **Sub-agent card:** not applicable. Pi exposes no sub-agent tool; its
+  commands are `/compact`, `/goal` and `/subork`. **Compaction:** not
+  exercised. After three short turns, one with a 100 KB attachment that the
+  model read with `bash`, Pi refused with "Nothing to compact (session too small)"
+  (HTTP 409 from the bridge). Each refused attempt still added a
+  `compact_context` card to the last assistant row.
+- **Lost write on a full disk** (1031 task 14): pass. The run used a 120 MB
+  APFS image mounted at `output/qa-batch/mnt` (`hdiutil`, `nobrowse`), with only
+  the new `qa-full` environment's `pi-bridge-sessions/<key>` linked onto it, and
+  the image then filled with `dd`. A short reply still fit in the session file's
+  last allocated block. A 300-word reply did not: the transcript showed the amber
+  line "This conversation could not be fully saved. Resuming it may miss recent
+  messages.", followed by Pi's "Turn failed" card (`qa-pi-full-disk-notice.png`).
+  The image was detached and deleted afterwards.
+- **Billed cost source** (1031 task 13): not run. No OpenRouter key is
+  configured, and none was added; `totalFromProvider` is true only for
+  OpenRouter.
+- **`slash-command-inactive.spec.ts`** (1020 (retired) task 9 step 3): not
+  run. The spec supports only Codex and Claude.
+
 Upstream references: [Pi releases](https://github.com/earendil-works/pi/releases)
 and [Pi SDK documentation](https://pi.dev/docs/latest/sdk).
 
@@ -2403,6 +2594,20 @@ reports children only through nested updates on the parent run, so a child is
 reported as detached when its parent ends rather than as completed. If a bump
 adds a channel that outlives the parent run, that workaround should shrink
 rather than be widened.
+
+### Signed-in checks at the 2026-11-28 pins (Cursor)
+
+From the 2026-11-28 signed-in run on mbp3 (see the Claude section's [signed-in checks](#signed-in-checks-at-the-2026-11-28-pins) for the profile, pins and evidence). None ran: there was no valid login. The `dev:test` Cursor
+credential route found no unexpired host key and wrote no snapshot, and the
+backend reported Cursor `signed-out`. No sign-in was attempted. Left open, at
+Cursor SDK 1.4.1:
+
+- 1020 (retired) task 9 step 2: the `close-retention-live.spec.ts` resume and
+  the original user row.
+- Step 3: `slash-command-inactive.spec.ts`. The spec does not support Cursor.
+- Step 6: the bridge's `--login` sign-in (skipped by instruction) and a turn
+  that uses tools and leaves a diff.
+- 1031 (retired) task 9 steps 2 and 3, and task 13's Cursor billed cost.
 
 Upstream reference: [`@cursor/sdk` on npm](https://www.npmjs.com/package/@cursor/sdk).
 
@@ -2753,6 +2958,19 @@ The `stable` pointer, not the binary, decides the channel. `grok --version` for
 1.0.44 printed `[alpha]` although `…/cli/stable` named it; a build can be promoted
 without being rebuilt, so the label is not evidence that the pin is wrong. Compare
 against the pointer (and `…/cli/alpha`, which may already be ahead) instead.
+
+### Signed-in checks at the 2026-11-28 pins (Grok)
+
+From the 2026-11-28 signed-in run on mbp3 (see the Claude section's [signed-in checks](#signed-in-checks-at-the-2026-11-28-pins) for the profile, pins and evidence). None ran: there was no valid login. The host Grok login expired
+at 2026-11-27T01:28:51Z, so the launcher withheld it, and the backend reported
+`needs-auth`. No sign-in was attempted. Left open, at Grok 1.0.88:
+
+- 1020 (retired) task 9 step 1: `session/new`, an edit without an approval
+  card, a `use_tool` match, `/compact` over ACP and `session_info_update`.
+- Step 3: `slash-command-inactive.spec.ts`. The spec does not support Grok.
+- 1031 (retired) task 9 steps 2 and 3.
+- Task 13's ACP billed cost.
+- Task 15: whether remote settings can override `GROK_STORAGE_MODE=local`.
 
 ## Antigravity (ACP)
 

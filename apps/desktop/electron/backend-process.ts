@@ -387,9 +387,11 @@ export function createBackendProcessEnvironment(
     }
     if (allowed.has("claude")) {
       if (inherited.ANTHROPIC_API_KEY) env.ANTHROPIC_API_KEY = inherited.ANTHROPIC_API_KEY;
-      // A shell that set CLAUDE_CONFIG_DIR (an Orkestrator agent tab on an
-      // added account, say) uses that directory's own Keychain entry, even
-      // when it spells ~/.claude. The backend reads the same login.
+      // A shell that set CLAUDE_CONFIG_DIR uses that directory's own Keychain
+      // entry, even when it spells ~/.claude. The backend reads the same
+      // login. `dev:test` drops one inside the production data directory (an
+      // Orkestrator agent tab's account home) before Electron starts
+      // (`scripts/dev/profile-environment.ts`), so that falls back to ~/.claude.
       const explicitClaudeConfigDir = inherited.CLAUDE_CONFIG_DIR?.trim();
       const claudeConfigDir =
         explicitClaudeConfigDir ||

@@ -49,6 +49,7 @@ import {
 } from "./profile-cleanup.js";
 import { formatAgentTestLogin, mintAgentTestLoginUrl, type AgentTestLogin } from "./login.js";
 import { prepareProfileBridgeBuilds, type TurboRunner } from "./bridge-builds.js";
+import { formatProfileEnvironmentScrub, scrubProfileEnvironment } from "./profile-environment.js";
 import {
   formatSeededWorkflowRecords,
   seededWorkflowCheckout,
@@ -533,6 +534,12 @@ export type ProfileSeedDependencies = {
    * credential sources either way.
    */
   hostSeed?: boolean;
+  /**
+   * The scrubbed environment the seeders read (`CODEX_HOME`,
+   * `XDG_DATA_HOME`), so a parent app's agent-account directories are never
+   * the host login they copy. Defaults to `process.env`.
+   */
+  env?: NodeJS.ProcessEnv;
   log?: (message: string) => void;
   warn?: (message: string) => void;
 };
@@ -573,9 +580,15 @@ export async function seedAgentTestProfileState(
   const hostSeed = dependencies.hostSeed !== false;
   const [, , toolchains] = await Promise.all([
     hostSeed
-      ? (dependencies.seedModelCatalogCaches ?? seedInstalledModelCatalogCaches)(profile)
+      ? (dependencies.seedModelCatalogCaches ?? seedInstalledModelCatalogCaches)(
+          profile,
+          dependencies.env ? { env: dependencies.env } : {},
+        )
       : [],
-    (dependencies.seedProviderCredentials ?? seedAgentTestProviderCredentials)(profile, { warn }),
+    (dependencies.seedProviderCredentials ?? seedAgentTestProviderCredentials)(profile, {
+      warn,
+      ...(dependencies.env ? { env: dependencies.env } : {}),
+    }),
     hostSeed
       ? (dependencies.seedAgentToolchains ?? seedInstalledAgentToolchains)(profile)
       : { seeded: [], failed: [] },
@@ -929,6 +942,8 @@ export async function startDevelopment(
     writeStatus?: typeof atomicWriteJson;
     checkAgentToolsPort?: typeof assertAgentToolsPortFree;
     seedWorkflowRecords?: WorkflowSeedRunner;
+    /** The launcher's inherited environment; defaults to `process.env`. */
+    env?: NodeJS.ProcessEnv;
   } = {},
 ): Promise<void> {
   const existingProfile = await resolveStoredProfile(args, flavor, dependencies.roots);
@@ -974,6 +989,21 @@ export async function startDevelopment(
     }
   }
 
+  // An agent-test profile never inherits the parent app's addresses and
+  // directories (`profile-environment.ts`); refused knobs stop the start here,
+  // before anything is written. A development profile is a person's own run.
+  const inheritedEnv = dependencies.env ?? process.env;
+  const scrub =
+    flavor === "agent-test"
+      ? scrubProfileEnvironment(inheritedEnv, {
+          ...(dependencies.roots ? { roots: dependencies.roots } : {}),
+          ...(dependencies.platform ? { platform: dependencies.platform } : {}),
+        })
+      : null;
+  const launchEnv = scrub?.env ?? inheritedEnv;
+  const scrubNotice = scrub ? formatProfileEnvironmentScrub(scrub) : null;
+  if (scrubNotice) console.log(scrubNotice);
+
   const hostSeedDisabled = resolveHostSeedDisabled(args, existingProfile, flavor);
   const [rendererPort, gatewayPort] = (await reserveLoopbackPorts(2)) as [number, number];
   let profile = resolveRuntimeProfile({
@@ -996,7 +1026,17 @@ export async function startDevelopment(
     )),
   });
   const profilePath = await initializeProfile(profile);
-  await seedAgentTestProfileState(profile, flavor, { hostSeed: !hostSeedDisabled });
+  if (scrub) {
+    // The launcher's output is not always kept; the profile's logs are. One
+    // line per start, so an older start's line is never mistaken for this one's.
+    await createBoundedLogWriter(path.join(profile.logDir, "environment.log"), 64 * 1024).write(
+      `${new Date().toISOString()} ${scrubNotice ?? "Profile environment: nothing inherited was dropped."}\n`,
+    );
+  }
+  await seedAgentTestProfileState(profile, flavor, {
+    hostSeed: !hostSeedDisabled,
+    ...(scrub ? { env: scrub.env } : {}),
+  });
   const statusPath = statusManifestPath(profile);
   let rendererUrl = `http://${profile.rendererHost}:${profile.rendererPort}`;
   const startedAt = new Date().toISOString();
@@ -1115,7 +1155,7 @@ export async function startDevelopment(
         cwd: webRoot,
         detached: true,
         stdio: ["ignore", "pipe", "pipe"],
-        env: rendererDevServerEnv(process.env, profile, rendererInstance),
+        env: rendererDevServerEnv(launchEnv, profile, rendererInstance),
       });
       viteExited = childExit(vite);
       attachLog(vite, path.join(profile.logDir, "vite.log"));
@@ -1149,22 +1189,22 @@ export async function startDevelopment(
       flavor,
       platform,
       requested: args.headless,
-      env: process.env,
+      env: launchEnv,
       interactive: dependencies.interactive ?? launcherIsInteractive(),
     };
     const { headless } = resolveElectronHeadless(headlessInputs);
     const notice = electronHeadlessNotice(headlessInputs);
     if (notice) console.log(notice);
-    const launch = electronLaunch(headless, platform, process.env);
+    const launch = electronLaunch(headless, platform, launchEnv);
     const electronEnv = launch.env;
     const electronSpawn = electronCommand(
       electronExecutable,
       [
         ...launch.switches,
-        ...electronDebugSwitches(flavor, process.env),
+        ...electronDebugSwitches(flavor, launchEnv),
         "apps/desktop/dist/electron/main.js",
       ],
-      { flavor, platform, env: process.env },
+      { flavor, platform, env: launchEnv },
     );
     electron = (dependencies.spawn ?? spawn)(electronSpawn.command, electronSpawn.args, {
       cwd: repositoryRoot,

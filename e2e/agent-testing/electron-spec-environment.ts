@@ -17,10 +17,19 @@
  * The desktop passes the variable through to agent-test backends
  * (`AGENT_TEST_SAFE_ENV_NAMES` in `apps/desktop/electron/backend-process.ts`).
  *
+ * The runner is usually an agent the production app launched, so the base is
+ * first stripped of that app's addresses and directories (its agent MCP URL,
+ * agent-account `CLAUDE_CONFIG_DIR`, toolchain CLI paths, `ORKESTRATOR_*`
+ * identifiers and `NODE_ENV`), as `dev:test` does
+ * (`apps/desktop/scripts/dev/profile-environment.ts`). A spec's `overrides`
+ * are applied after that and may set any of them deliberately.
+ *
  * `tests/unit/electron-spec-environment.test.ts` fails on an `electron.launch`
  * under `e2e/agent-testing/` whose `env` is not built here (or by
  * `packagedLaunchEnvironment`, which calls this).
  */
+import { scrubProfileEnvironment } from "../../apps/desktop/scripts/dev/profile-environment";
+
 export const HOST_REACHABILITY_CHECK_ENV = "ORKESTRATOR_HOST_REACHABILITY_CHECK";
 
 export function electronSpecEnvironment(
@@ -28,7 +37,7 @@ export function electronSpecEnvironment(
   overrides: Readonly<Record<string, string | undefined>> = {},
 ): Record<string, string> {
   const result: Record<string, string> = {};
-  for (const [name, value] of Object.entries(base)) {
+  for (const [name, value] of Object.entries(scrubProfileEnvironment(base).env)) {
     if (value !== undefined && name !== HOST_REACHABILITY_CHECK_ENV) result[name] = value;
   }
   for (const [name, value] of Object.entries(overrides)) {

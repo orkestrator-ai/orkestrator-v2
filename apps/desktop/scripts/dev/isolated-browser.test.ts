@@ -1,8 +1,8 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { mkdtemp, writeFile, readFile, rm, access } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { DEFAULT_TEST_TIMEOUT_MS } from "../../../../tests/default-test-timeout.js";
 import { resolveElectronHeadless } from "./lifecycle.js";
 import { parseAgentTestArguments } from "./arguments.js";
@@ -46,7 +46,7 @@ if (process.env.ORK_ISOLATED_TEST_FAIL_PROFILE && profile !== process.env.ORK_IS
 const readyFile = (name) => path.join(root, "ready-" + name);
 const browser = path.basename(process.argv[1]) === "bunx";
 const task = browser ? "playwright" : args[1];
-fs.appendFileSync(path.join(root, "events"), JSON.stringify({ task, profile, args, pid: process.pid, scheduler: process.env.ORKESTRATOR_TEST_SCHEDULER_DIR, workers: process.env.ORKESTRATOR_TEST_HOST_WORKERS, headless: process.env.ORKESTRATOR_AGENT_TEST_HEADLESS, multiReview: process.env.ORKESTRATOR_AGENT_TEST_LIVE_MULTI_REVIEW, coordinator: process.env.ORKESTRATOR_AGENT_TEST_LIVE_COORDINATOR, design: process.env.ORKESTRATOR_AGENT_TEST_LIVE_DESIGN, revisionTokens: process.env.ORKESTRATOR_AGENT_TEST_LIVE_REVISION_TOKENS, tabRequests: process.env.ORKESTRATOR_AGENT_TEST_LIVE_TAB_REQUESTS, containerApproval: process.env.ORKESTRATOR_AGENT_TEST_LIVE_CONTAINER_APPROVAL, claudeTerminal: process.env.ORKESTRATOR_AGENT_TEST_LIVE_CLAUDE_TERMINAL, grokLogin: process.env.ORKESTRATOR_AGENT_TEST_LIVE_GROK_LOGIN, idleObservation: process.env.ORKESTRATOR_AGENT_TEST_LIVE_IDLE_OBSERVATION }) + "\\n");
+fs.appendFileSync(path.join(root, "events"), JSON.stringify({ task, profile, args, pid: process.pid, scheduler: process.env.ORKESTRATOR_TEST_SCHEDULER_DIR, workers: process.env.ORKESTRATOR_TEST_HOST_WORKERS, headless: process.env.ORKESTRATOR_AGENT_TEST_HEADLESS, multiReview: process.env.ORKESTRATOR_AGENT_TEST_LIVE_MULTI_REVIEW, coordinator: process.env.ORKESTRATOR_AGENT_TEST_LIVE_COORDINATOR, design: process.env.ORKESTRATOR_AGENT_TEST_LIVE_DESIGN, revisionTokens: process.env.ORKESTRATOR_AGENT_TEST_LIVE_REVISION_TOKENS, tabRequests: process.env.ORKESTRATOR_AGENT_TEST_LIVE_TAB_REQUESTS, containerApproval: process.env.ORKESTRATOR_AGENT_TEST_LIVE_CONTAINER_APPROVAL, claudeTerminal: process.env.ORKESTRATOR_AGENT_TEST_LIVE_CLAUDE_TERMINAL, grokLogin: process.env.ORKESTRATOR_AGENT_TEST_LIVE_GROK_LOGIN, idleObservation: process.env.ORKESTRATOR_AGENT_TEST_LIVE_IDLE_OBSERVATION, mcpUrl: process.env.ORKESTRATOR_AGENT_MCP_URL ?? null, nodeEnv: process.env.NODE_ENV ?? null, claudeCli: process.env.CLAUDE_CLI_PATH ?? null, reachability: process.env.ORKESTRATOR_HOST_REACHABILITY_CHECK ?? null }) + "\\n");
 if (task === "dev:test") {
   if (mode === "startup-fail") process.exit(3);
   fs.writeFileSync(path.join(root, "launcher"), String(process.pid));
@@ -109,6 +109,10 @@ if (task === "dev:test") {
             idleObservation?: string;
             revisionTokens?: string;
             tabRequests?: string;
+            mcpUrl?: string | null;
+            nodeEnv?: string | null;
+            claudeCli?: string | null;
+            reachability?: string | null;
           },
       );
   // Spread into every run's options: the fakes are ready at once, so a short poll only saves
@@ -595,6 +599,37 @@ test.each(["SIGTERM", "SIGKILL"] as const)(
   },
   DEFAULT_TEST_TIMEOUT_MS,
 );
+
+test("isolated browser strips the parent app's environment from its launchers and Playwright", async () => {
+  const f = await fixture();
+  // What an agent launched by the production app inherits (fake values).
+  f.env.ORKESTRATOR_AGENT_MCP_URL = "http://127.0.0.1:45507/mcp";
+  f.env.NODE_ENV = "production";
+  f.env.CLAUDE_CLI_PATH = path.join(homedir(), ".config", "orkestrator-v2", "toolchains", "claude");
+  f.env.ORKESTRATOR_HOST_REACHABILITY_CHECK = "off";
+  const log = spyOn(console, "log").mockImplementation(() => {});
+  try {
+    expect(await runIsolatedBrowser(f)).toBe(0);
+    const notice = log.mock.calls
+      .map((call) => String(call[0]))
+      .find((line) => line.startsWith("Profile environment: dropped"));
+    for (const name of ["ORKESTRATOR_AGENT_MCP_URL", "NODE_ENV", "CLAUDE_CLI_PATH"]) {
+      expect(notice).toContain(name);
+    }
+    expect(notice).not.toContain("45507/mcp");
+  } finally {
+    log.mockRestore();
+  }
+  const events = await f.events();
+  expect(events.map((event) => event.task)).toContain("dev:test");
+  expect(events.map((event) => event.task)).toContain("playwright");
+  for (const event of events) {
+    expect(event.mcpUrl).toBeNull();
+    expect(event.nodeEnv).toBeNull();
+    expect(event.claudeCli).toBeNull();
+    expect(event.reachability).toBe("off");
+  }
+});
 
 test("isolated browser overrides an inherited live Multi Review opt-in", async () => {
   const f = await fixture();

@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { resolveRuntimeProfile } from "../../electron/runtime-profile.js";
 import { parseAgentTestArguments } from "./arguments.js";
+import { formatProfileEnvironmentScrub, scrubProfileEnvironment } from "./profile-environment.js";
 
 const repositoryRoot = path.resolve(import.meta.dir, "../../../..");
 const MAX_STATUS_BYTES = 64 * 1024;
@@ -385,8 +386,14 @@ export async function runIsolatedBrowser(options: IsolatedBrowserOptions = {}): 
     ? dockerFixtureShards(profileArgs)
     : [undefined];
   const runProfiles = shards.map((_, index) => (index === 0 ? profile : `${profile}-${index + 1}`));
+  // The runner is usually started by an agent inside the production app; its
+  // launchers and Playwright runs must not inherit that app's addresses and
+  // directories (`profile-environment.ts`). Each launcher scrubs again.
+  const scrub = scrubProfileEnvironment(options.env ?? process.env);
+  const scrubNotice = formatProfileEnvironmentScrub(scrub);
+  if (scrubNotice) console.log(scrubNotice);
   const baseEnv: NodeJS.ProcessEnv = {
-    ...(options.env ?? process.env),
+    ...scrub.env,
     // These are ordinary local smoke tasks. Live-provider and Docker coverage
     // remain separate opt-in tasks with their own fixture/credential setup.
     ORKESTRATOR_AGENT_TEST_REVIEW: "0",

@@ -84,6 +84,26 @@ describe("electronSpecEnvironment", () => {
     expect(env).toEqual({ PATH: "/bin", ELECTRON_DEV: "1", [HOST_REACHABILITY_CHECK_ENV]: "on" });
   });
 
+  test("drops the parent app's environment from the runner but keeps a spec's override", () => {
+    const env = electronSpecEnvironment(
+      {
+        PATH: "/bin",
+        NODE_ENV: "production",
+        ORKESTRATOR_AGENT_MCP_URL: "http://127.0.0.1:45507/mcp",
+        ORKESTRATOR_ENVIRONMENT_ID: "parent",
+        CLAUDE_CLI_PATH: "/fake/toolchains/claude",
+        ORKESTRATOR_AGENT_TEST_HEADLESS: "1",
+      },
+      { NODE_ENV: "development" },
+    );
+    expect(env).toEqual({
+      PATH: "/bin",
+      NODE_ENV: "development",
+      ORKESTRATOR_AGENT_TEST_HEADLESS: "1",
+      [HOST_REACHABILITY_CHECK_ENV]: "off",
+    });
+  });
+
   test("the packaged app's allowlisted environment has the probe off too", () => {
     const env = packagedLaunchEnvironment(
       { PATH: "/bin", [HOST_REACHABILITY_CHECK_ENV]: "on" },

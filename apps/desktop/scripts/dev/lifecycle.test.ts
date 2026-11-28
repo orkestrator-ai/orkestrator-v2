@@ -222,7 +222,13 @@ describe("Electron readiness", () => {
         // Inherited from a shell, it must not hide a profile that keeps its window.
         ORKESTRATOR_AGENT_TEST_HIDDEN_WINDOWS: "1",
         ...(debug ? { [AGENT_TEST_ELECTRON_DEBUG_ENV]: "1" } : {}),
+        // What an agent launched by the production app inherits: an agent-test
+        // profile must not pass these on; a documented knob still reaches it.
+        ORKESTRATOR_AGENT_MCP_URL: "http://127.0.0.1:45507/mcp",
+        CLAUDE_CLI_PATH: path.join(roots.productionDataDir, "toolchains", "bin", "claude"),
+        ORKESTRATOR_HOST_REACHABILITY_CHECK: "off",
       };
+      const productionValues = ["ORKESTRATOR_AGENT_MCP_URL", "CLAUDE_CLI_PATH"] as const;
       const ambientHeadlessVariables = [
         "ORKESTRATOR_AGENT_TEST_HEADLESS",
         "ORKESTRATOR_AGENT_TEST_HEADLESS_ELECTRON",
@@ -257,6 +263,7 @@ describe("Electron readiness", () => {
       let electronCommandName: string | undefined;
       let electronArgs: readonly string[] | undefined;
       let electronOptions: SpawnOptions | undefined;
+      let viteOptions: SpawnOptions | undefined;
       try {
         await startDevelopment(args, flavor, {
           platform,
@@ -267,7 +274,10 @@ describe("Electron readiness", () => {
           bundle: async () =>
             ({ success: true, outputs: [], logs: [] }) as unknown as Bun.BuildOutput,
           spawn: ((command: string, args: readonly string[], options: SpawnOptions) => {
-            if (command === "bun") return vite;
+            if (command === "bun") {
+              viteOptions = options;
+              return vite;
+            }
             electronCommandName = command;
             electronArgs = args;
             electronOptions = options;
@@ -352,6 +362,29 @@ describe("Electron readiness", () => {
           mode === "hidden" ? "1" : undefined,
         );
         expect(electronOptions?.env?.ELECTRON_DEV).toBe("1");
+        for (const name of productionValues) {
+          const expected = flavor === "agent-test" ? undefined : launchEnv[name];
+          expect(electronOptions?.env?.[name]).toBe(expected);
+          expect(viteOptions?.env?.[name]).toBe(expected);
+          if (flavor === "agent-test") {
+            expect(credentials.mock.calls[0]?.[1]?.env?.[name]).toBeUndefined();
+          }
+        }
+        expect(electronOptions?.env?.ORKESTRATOR_HOST_REACHABILITY_CHECK).toBe("off");
+        const scrubNotices = notice.mock.calls
+          .map((call) => String(call[0]))
+          .filter((line) => line.startsWith("Profile environment: dropped"));
+        expect(scrubNotices.length).toBe(flavor === "agent-test" ? 1 : 0);
+        if (flavor === "agent-test") {
+          const logged = await readFile(path.join(profile.logDir, "environment.log"), "utf8");
+          for (const line of [scrubNotices[0]!, logged]) {
+            for (const name of productionValues) {
+              expect(line).toContain(name);
+              expect(line).not.toContain(launchEnv[name]);
+            }
+            expect(line).not.toContain("ORKESTRATOR_HOST_REACHABILITY_CHECK");
+          }
+        }
         for (const [key, value] of Object.entries(launchEnv)) expect(process.env[key]).toBe(value);
         expect(bridges).toHaveBeenCalledTimes(flavor === "agent-test" ? 1 : 0);
         expect(postSpawnWritePending).toBe(true);

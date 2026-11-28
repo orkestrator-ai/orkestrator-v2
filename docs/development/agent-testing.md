@@ -751,6 +751,63 @@ The second start is idempotent and reports the already-running launcher. Wait fo
 `testProject`, `electronTitle`, and `logDir`. The manifest names the mode-0600
 gateway auth file but never includes its token.
 
+### What a profile inherits from your shell
+
+An agent that the production app launched has a shell full of that app's
+addresses and directories: its agent account's `CLAUDE_CONFIG_DIR` inside the
+real data directory, `CLAUDE_CLI_PATH` and `PATH` entries in its
+`toolchains/`, the agent MCP URL and token, the parent environment's
+`ORKESTRATOR_*` identifiers and `NODE_ENV`. `dev:test` removes them before it
+seeds the profile or starts Vite and Electron (and so the backend and its
+bridges), so you no longer need to unset anything by hand
+(`apps/desktop/scripts/dev/profile-environment.ts`). The one-shot runners
+(`test:agent:*`, through `runIsolatedBrowser`) scrub their launchers' and
+Playwright's environment the same way. Electron specs scrub the runner's
+environment before applying fixture settings for Electron and for backends
+started directly by a spec. `dev:login`,
+`dev:status`, `dev:stop` and `dev:reset` start no profile process, so there is
+nothing for them to pass on.
+
+What is dropped:
+
+- `NODE_ENV`, whatever its value, and every `*_CLI_PATH` (a profile runs only
+  its own managed toolchain).
+- The parent agent session's `CLAUDE*`, `ANTHROPIC_*` and `CODEX_*` variables,
+  except `ANTHROPIC_API_KEY`, `CLAUDE_CONFIG_DIR` and `CODEX_HOME`.
+- Every `ORKESTRATOR_*` variable that is not a documented test knob, including
+  the agent MCP URL and token, `ORKESTRATOR_ENVIRONMENT_ID`, the port range,
+  `ORKESTRATOR_VERSION` and the `ORKESTRATOR_AGENT_TEST_HOST_*` values a parent
+  profile's backend sets.
+- Paths inside the production data directory, including matching `PATH`
+  entries and symlink aliases. The check includes the standard locations,
+  a custom `ORKESTRATOR_DATA_DIR` and storage paths advertised by the parent
+  agent bridge.
+- Endpoints on port 34121, 34122 or 45507, and bare numbers matching those
+  ports in port settings. A duration can use the same number.
+
+What is kept: `ORKESTRATOR_HOST_REACHABILITY_CHECK`, `ORKESTRATOR_LOG_LEVEL`
+and the other single knobs this guide documents, every `ORKESTRATOR_AGENT_TEST_*`,
+`ORKESTRATOR_TEST_*`, `ORKESTRATOR_E2E_*` and `ORKESTRATOR_LIVE_*` variable, the
+provider API keys a `--credential-source` route forwards, and `CLAUDE_CONFIG_DIR`,
+`CODEX_HOME` and `PI_CODING_AGENT_DIR` when they point outside the production data
+directory. A `CLAUDE_CONFIG_DIR` or `CODEX_HOME` inside it (an agent tab's
+account home) is dropped, so a `--credential-source claude` or `codex` profile
+reads the host's default login instead. A kept knob whose value points into the
+production data directory or at one of those ports is refused: the start fails
+naming the variable, and you unset it or point it elsewhere.
+
+The launcher prints which variables it dropped, by name and never with their
+values, and appends the same line (or `nothing inherited was dropped`) with a
+timestamp to the profile's `logs/environment.log`:
+
+```text
+Profile environment: dropped 3 inherited environment variables that could reach the parent Orkestrator install: CLAUDE_CLI_PATH, NODE_ENV, ORKESTRATOR_AGENT_MCP_URL (values not shown).
+```
+
+A new knob a profile must receive from the caller's shell goes in the kept
+lists in `profile-environment.ts`; its test fails when this guide names an
+`ORKESTRATOR_*` variable the scrub would drop.
+
 ### Bridge builds
 
 The backend runs from source, but it launches every local bridge from
@@ -3455,9 +3512,12 @@ than treating it as a product failure.
 The profile's Claude bridge authenticates with the Claude login of the shell
 that started `dev:test` (access token only), so check that login's usage in
 Settings before a run. A shell with no `CLAUDE_CONFIG_DIR` uses the default
-login (on macOS the plain `Claude Code-credentials` Keychain entry). A shell
-whose `CLAUDE_CONFIG_DIR` is set, for example an Orkestrator agent tab on an
-added account, uses that directory's login: the desktop records the directory
+login (on macOS the plain `Claude Code-credentials` Keychain entry). So does
+an Orkestrator agent tab: its account home is inside the production data
+directory, and `dev:test` drops that `CLAUDE_CONFIG_DIR` (see
+[What a profile inherits from your shell](#what-a-profile-inherits-from-your-shell)).
+A shell whose `CLAUDE_CONFIG_DIR` is set to a directory outside it uses that
+directory's login: the desktop records the directory
 and that it was explicit (`ORKESTRATOR_AGENT_TEST_HOST_CLAUDE_CONFIG_DIR_EXPLICIT`),
 and the backend reads the matching hashed Keychain entry or that directory's
 `.credentials.json`, with no fallback to the default login. An explicit

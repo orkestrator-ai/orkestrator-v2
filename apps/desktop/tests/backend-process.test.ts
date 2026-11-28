@@ -44,6 +44,7 @@ import {
 import type { BackendExitDiagnosis } from "../electron/backend-exit-diagnosis";
 import { installControlledTimeout } from "../../../tests/helpers/controlled-timeout";
 import { DEFAULT_TEST_TIMEOUT_MS } from "../../../tests/default-test-timeout";
+import { startElectronSpecBackend } from "../../../e2e/agent-testing/electron-spec-environment";
 
 const directories: string[] = [];
 const processes: BackendProcess[] = [];
@@ -1714,6 +1715,63 @@ sleep 5
       expect(await browserResponse.json()).toEqual({
         result: "Hello, Browser! You've been greeted from the Orkestrator backend!",
       });
+    },
+    SPAWN_TIMEOUT_MS,
+  );
+
+  test(
+    "direct Electron spec backends use the scrubbed PATH for Bun and its environment on every start",
+    async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "ork-electron-spec-backend-"));
+      directories.push(root);
+      const production = path.join(root, "production");
+      const productionBin = path.join(production, "toolchains", "bin");
+      const testBin = path.join(root, "test-bin");
+      await mkdir(productionBin, { recursive: true });
+      await mkdir(testBin);
+      await symlink(process.execPath, path.join(testBin, "real-bun"));
+      await writeFile(path.join(productionBin, "bun"), "#!/bin/sh\nexit 67\n", { mode: 0o755 });
+      await writeFile(
+        path.join(testBin, "bun"),
+        `#!/bin/sh
+printf '%s\\n' "$PATH" "$ORKESTRATOR_HOST_REACHABILITY_CHECK" "$ORKESTRATOR_CONTROL_MCP_PORT" >> "\${0%/*}/observed-env"
+exec "\${0%/*}/real-bun" "$@"
+`,
+        { mode: 0o755 },
+      );
+      const safePath = [testBin, "/usr/bin", "/bin"].join(path.delimiter);
+      const base = {
+        ORKESTRATOR_DATA_DIR: production,
+        PATH: [productionBin, safePath].join(path.delimiter),
+        DOCKER_CONFIG: path.join(root, "docker"),
+        ORKESTRATOR_HOST_REACHABILITY_CHECK: "on",
+      };
+      const backend = new BackendProcess();
+      processes.push(backend);
+      const appRoot = path.resolve(import.meta.dir, "../../..");
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        await startElectronSpecBackend(
+          backend,
+          {
+            isDev: true,
+            appRoot,
+            resourceRoot: appRoot,
+            dataDir: path.join(root, "fixture-data"),
+            gatewayHost: "127.0.0.1",
+            gatewayPort: 0,
+            allowNonTailscaleBind: true,
+            runtimeFlavor: "agent-test",
+            onEvent: () => undefined,
+          },
+          {},
+          base,
+        );
+        await backend.stop();
+      }
+      expect(
+        (await readFile(path.join(testBin, "observed-env"), "utf8")).trim().split("\n"),
+      ).toEqual([safePath, "off", "0", safePath, "off", "0"]);
+      expect(base.PATH.startsWith(productionBin)).toBe(true);
     },
     SPAWN_TIMEOUT_MS,
   );

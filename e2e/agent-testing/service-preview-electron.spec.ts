@@ -62,6 +62,7 @@ import { prepareFixtureRepository } from "../../apps/desktop/scripts/dev/fixture
 import { initializeProfile, reserveLoopbackPorts } from "../../apps/desktop/scripts/dev/profile-io";
 import { startPreviewFixture, type PreviewFixture } from "../../test-fixtures/preview-app/server";
 import { recordProcessOutput, withElectronDiagnostics } from "./electron-diagnostics";
+import { startElectronSpecBackend } from "./electron-spec-environment";
 import {
   bundleElectron,
   closeElectron as quitElectron,
@@ -2563,20 +2564,6 @@ test("Reset site data removes a hostile service worker and the service's storage
   expect(sibling.worker).toBe("svc-b");
 });
 
-/** Call `run` with `values` in `process.env`, restored as soon as it returns. */
-function withEnvironment<T>(values: Record<string, string>, run: () => T): T {
-  const saved = Object.fromEntries(Object.keys(values).map((name) => [name, process.env[name]]));
-  Object.assign(process.env, values);
-  try {
-    return run();
-  } finally {
-    for (const [name, value] of Object.entries(saved)) {
-      if (value === undefined) delete process.env[name];
-      else process.env[name] = value;
-    }
-  }
-}
-
 /** A second, disposable backend (agent-test isolation), as a remote connection would reach it. */
 async function startRemoteBackend(validateCapabilities?: () => void): Promise<RemoteBackend> {
   const [rendererPort, gatewayPort] = (await reserveLoopbackPorts(2)) as [number, number];
@@ -2597,29 +2584,24 @@ async function startRemoteBackend(validateCapabilities?: () => void): Promise<Re
   const backendProcess = new BackendProcess();
   s().remoteProcess = backendProcess;
   try {
-    // The backend's environment is built synchronously when it spawns.
-    await withEnvironment(
+    await startElectronSpecBackend(
+      backendProcess,
       {
-        ORKESTRATOR_PREVIEW_TRANSPORT: "1",
-        ORKESTRATOR_CONTROL_MCP_PORT: "0",
-        ORKESTRATOR_HOST_REACHABILITY_CHECK: "off",
+        isDev: true,
+        appRoot: repositoryRoot,
+        resourceRoot: repositoryRoot,
+        dataDir: profile.dataDir,
+        gatewayHost: "127.0.0.1",
+        gatewayPort,
+        allowNonTailscaleBind: true,
+        runtimeFlavor: "agent-test",
+        runtimeProfileId: profile.id,
+        worktreeDir: profile.worktreeDir,
+        strictGatewayPort: true,
+        strictDockerOwner: true,
+        onEvent: () => undefined,
       },
-      () =>
-        backendProcess.start({
-          isDev: true,
-          appRoot: repositoryRoot,
-          resourceRoot: repositoryRoot,
-          dataDir: profile.dataDir,
-          gatewayHost: "127.0.0.1",
-          gatewayPort,
-          allowNonTailscaleBind: true,
-          runtimeFlavor: "agent-test",
-          runtimeProfileId: profile.id,
-          worktreeDir: profile.worktreeDir,
-          strictGatewayPort: true,
-          strictDockerOwner: true,
-          onEvent: () => undefined,
-        }),
+      { ORKESTRATOR_PREVIEW_TRANSPORT: "1" },
     );
     const info = backendProcess.getInfo();
     if (!info) throw new Error("The remote backend reported no gateway");

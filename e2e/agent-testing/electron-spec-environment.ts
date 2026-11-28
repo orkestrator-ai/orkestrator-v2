@@ -17,10 +17,20 @@
  * The desktop passes the variable through to agent-test backends
  * (`AGENT_TEST_SAFE_ENV_NAMES` in `apps/desktop/electron/backend-process.ts`).
  *
+ * The runner is usually an agent the production app launched, so the base is
+ * first stripped of that app's addresses and directories (its agent MCP URL,
+ * agent-account `CLAUDE_CONFIG_DIR`, toolchain CLI paths, `ORKESTRATOR_*`
+ * identifiers and `NODE_ENV`), as `dev:test` does
+ * (`apps/desktop/scripts/dev/profile-environment.ts`). A spec's `overrides`
+ * are applied after that and may set any of them deliberately.
+ *
  * `tests/unit/electron-spec-environment.test.ts` fails on an `electron.launch`
  * under `e2e/agent-testing/` whose `env` is not built here (or by
  * `packagedLaunchEnvironment`, which calls this).
  */
+import type { BackendProcess } from "../../apps/desktop/electron/backend-process";
+import { scrubProfileEnvironment } from "../../apps/desktop/scripts/dev/profile-environment";
+
 export const HOST_REACHABILITY_CHECK_ENV = "ORKESTRATOR_HOST_REACHABILITY_CHECK";
 
 export function electronSpecEnvironment(
@@ -28,7 +38,7 @@ export function electronSpecEnvironment(
   overrides: Readonly<Record<string, string | undefined>> = {},
 ): Record<string, string> {
   const result: Record<string, string> = {};
-  for (const [name, value] of Object.entries(base)) {
+  for (const [name, value] of Object.entries(scrubProfileEnvironment(base).env)) {
     if (value !== undefined && name !== HOST_REACHABILITY_CHECK_ENV) result[name] = value;
   }
   for (const [name, value] of Object.entries(overrides)) {
@@ -39,16 +49,18 @@ export function electronSpecEnvironment(
   return result;
 }
 
-/** BackendProcess captures its child environment synchronously in start().
- * Restore immediately so other tests never inherit this spec's settings.
- */
-export function startElectronSpecBackend<T>(start: () => T): T {
-  const previous = process.env[HOST_REACHABILITY_CHECK_ENV];
-  process.env[HOST_REACHABILITY_CHECK_ENV] = "off";
-  try {
-    return start();
-  } finally {
-    if (previous === undefined) delete process.env[HOST_REACHABILITY_CHECK_ENV];
-    else process.env[HOST_REACHABILITY_CHECK_ENV] = previous;
-  }
+/** Direct disposable backends use the same scrub and get an ephemeral control port. */
+export function startElectronSpecBackend(
+  backend: BackendProcess,
+  options: Omit<Parameters<BackendProcess["start"]>[0], "inheritedEnv">,
+  overrides: NodeJS.ProcessEnv = {},
+  base: NodeJS.ProcessEnv = process.env,
+): ReturnType<BackendProcess["start"]> {
+  return backend.start({
+    ...options,
+    inheritedEnv: electronSpecEnvironment(base, {
+      ORKESTRATOR_CONTROL_MCP_PORT: "0",
+      ...overrides,
+    }),
+  });
 }

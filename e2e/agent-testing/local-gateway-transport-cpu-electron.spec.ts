@@ -183,7 +183,7 @@ async function measureRun(mode: TransportMode, run: number, root: string): Promi
       cwd: repositoryRoot,
       detached: true,
       stdio: ["ignore", "pipe", "pipe"],
-      env: electronSpecEnvironment(stack.electronEnv),
+      env: electronSpecEnvironment(process.env, stack.electronOverrides),
     });
     electron = ownProcessGroup(child);
     recordProcessOutput("electron", child);

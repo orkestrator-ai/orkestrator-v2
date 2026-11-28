@@ -961,6 +961,21 @@ export async function startDevelopment(
       `Profile ${existingProfile.id} has surviving processes without its launcher: ${orphaned.join(", ")}. Run mise run dev:stop before restarting.`,
     );
   }
+  // An agent-test profile never inherits the parent app's addresses and
+  // directories (`profile-environment.ts`); refused knobs stop the start here,
+  // before anything is written. A development profile is a person's own run.
+  const inheritedEnv = dependencies.env ?? process.env;
+  const scrub =
+    flavor === "agent-test"
+      ? scrubProfileEnvironment(inheritedEnv, {
+          ...(dependencies.roots ? { roots: dependencies.roots } : {}),
+          ...(dependencies.platform ? { platform: dependencies.platform } : {}),
+        })
+      : null;
+  const launchEnv = scrub?.env ?? inheritedEnv;
+  const scrubNotice = scrub ? formatProfileEnvironmentScrub(scrub) : null;
+  if (scrubNotice) console.log(scrubNotice);
+
   await pruneOrphanedProfiles(existingProfile.id, dependencies.roots, dependencies.prune);
 
   const launcherStart = processStartTime(process.pid) ?? Date.now();
@@ -988,21 +1003,6 @@ export async function startDevelopment(
       agentToolsPort = await claimAgentToolsPort({ ...claim, port: requestedAgentToolsPort });
     }
   }
-
-  // An agent-test profile never inherits the parent app's addresses and
-  // directories (`profile-environment.ts`); refused knobs stop the start here,
-  // before anything is written. A development profile is a person's own run.
-  const inheritedEnv = dependencies.env ?? process.env;
-  const scrub =
-    flavor === "agent-test"
-      ? scrubProfileEnvironment(inheritedEnv, {
-          ...(dependencies.roots ? { roots: dependencies.roots } : {}),
-          ...(dependencies.platform ? { platform: dependencies.platform } : {}),
-        })
-      : null;
-  const launchEnv = scrub?.env ?? inheritedEnv;
-  const scrubNotice = scrub ? formatProfileEnvironmentScrub(scrub) : null;
-  if (scrubNotice) console.log(scrubNotice);
 
   const hostSeedDisabled = resolveHostSeedDisabled(args, existingProfile, flavor);
   const [rendererPort, gatewayPort] = (await reserveLoopbackPorts(2)) as [number, number];

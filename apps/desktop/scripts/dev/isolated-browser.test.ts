@@ -46,7 +46,7 @@ if (process.env.ORK_ISOLATED_TEST_FAIL_PROFILE && profile !== process.env.ORK_IS
 const readyFile = (name) => path.join(root, "ready-" + name);
 const browser = path.basename(process.argv[1]) === "bunx";
 const task = browser ? "playwright" : args[1];
-fs.appendFileSync(path.join(root, "events"), JSON.stringify({ task, profile, args, pid: process.pid, scheduler: process.env.ORKESTRATOR_TEST_SCHEDULER_DIR, workers: process.env.ORKESTRATOR_TEST_HOST_WORKERS, headless: process.env.ORKESTRATOR_AGENT_TEST_HEADLESS, multiReview: process.env.ORKESTRATOR_AGENT_TEST_LIVE_MULTI_REVIEW, coordinator: process.env.ORKESTRATOR_AGENT_TEST_LIVE_COORDINATOR, design: process.env.ORKESTRATOR_AGENT_TEST_LIVE_DESIGN, revisionTokens: process.env.ORKESTRATOR_AGENT_TEST_LIVE_REVISION_TOKENS, tabRequests: process.env.ORKESTRATOR_AGENT_TEST_LIVE_TAB_REQUESTS, containerApproval: process.env.ORKESTRATOR_AGENT_TEST_LIVE_CONTAINER_APPROVAL, claudeTerminal: process.env.ORKESTRATOR_AGENT_TEST_LIVE_CLAUDE_TERMINAL, grokLogin: process.env.ORKESTRATOR_AGENT_TEST_LIVE_GROK_LOGIN, idleObservation: process.env.ORKESTRATOR_AGENT_TEST_LIVE_IDLE_OBSERVATION, mcpUrl: process.env.ORKESTRATOR_AGENT_MCP_URL ?? null, nodeEnv: process.env.NODE_ENV ?? null, claudeCli: process.env.CLAUDE_CLI_PATH ?? null, reachability: process.env.ORKESTRATOR_HOST_REACHABILITY_CHECK ?? null }) + "\\n");
+fs.appendFileSync(path.join(root, "events"), JSON.stringify({ task, profile, args, pid: process.pid, scheduler: process.env.ORKESTRATOR_TEST_SCHEDULER_DIR, workers: process.env.ORKESTRATOR_TEST_HOST_WORKERS, headless: process.env.ORKESTRATOR_AGENT_TEST_HEADLESS, multiReview: process.env.ORKESTRATOR_AGENT_TEST_LIVE_MULTI_REVIEW, coordinator: process.env.ORKESTRATOR_AGENT_TEST_LIVE_COORDINATOR, design: process.env.ORKESTRATOR_AGENT_TEST_LIVE_DESIGN, revisionTokens: process.env.ORKESTRATOR_AGENT_TEST_LIVE_REVISION_TOKENS, tabRequests: process.env.ORKESTRATOR_AGENT_TEST_LIVE_TAB_REQUESTS, containerApproval: process.env.ORKESTRATOR_AGENT_TEST_LIVE_CONTAINER_APPROVAL, claudeTerminal: process.env.ORKESTRATOR_AGENT_TEST_LIVE_CLAUDE_TERMINAL, grokLogin: process.env.ORKESTRATOR_AGENT_TEST_LIVE_GROK_LOGIN, idleObservation: process.env.ORKESTRATOR_AGENT_TEST_LIVE_IDLE_OBSERVATION, mcpUrl: process.env.ORKESTRATOR_AGENT_MCP_URL ?? null, nodeEnv: process.env.NODE_ENV ?? null, claudeCli: process.env.CLAUDE_CLI_PATH ?? null, claudeHome: process.env.CLAUDE_CONFIG_DIR ?? null, codexHome: process.env.CODEX_HOME ?? null, path: process.env.PATH, reachability: process.env.ORKESTRATOR_HOST_REACHABILITY_CHECK ?? null }) + "\\n");
 if (task === "dev:test") {
   if (mode === "startup-fail") process.exit(3);
   fs.writeFileSync(path.join(root, "launcher"), String(process.pid));
@@ -112,6 +112,9 @@ if (task === "dev:test") {
             mcpUrl?: string | null;
             nodeEnv?: string | null;
             claudeCli?: string | null;
+            claudeHome?: string | null;
+            codexHome?: string | null;
+            path?: string;
             reachability?: string | null;
           },
       );
@@ -606,6 +609,12 @@ test("isolated browser strips the parent app's environment from its launchers an
   f.env.ORKESTRATOR_AGENT_MCP_URL = "http://127.0.0.1:45507/mcp";
   f.env.NODE_ENV = "production";
   f.env.CLAUDE_CLI_PATH = path.join(homedir(), ".config", "orkestrator-v2", "toolchains", "claude");
+  const customProduction = path.join(f.root, "custom-production");
+  const productionBin = path.join(customProduction, "toolchains", "bin");
+  f.env.ORKESTRATOR_DATA_DIR = customProduction;
+  f.env.CLAUDE_CONFIG_DIR = path.join(customProduction, "accounts", "claude");
+  f.env.CODEX_HOME = path.join(customProduction, "accounts", "codex");
+  f.env.PATH = [productionBin, f.env.PATH].join(path.delimiter);
   f.env.ORKESTRATOR_HOST_REACHABILITY_CHECK = "off";
   const log = spyOn(console, "log").mockImplementation(() => {});
   try {
@@ -627,6 +636,10 @@ test("isolated browser strips the parent app's environment from its launchers an
     expect(event.mcpUrl).toBeNull();
     expect(event.nodeEnv).toBeNull();
     expect(event.claudeCli).toBeNull();
+    expect(event.claudeHome).toBeNull();
+    expect(event.codexHome).toBeNull();
+    expect(event.path).toContain(f.root);
+    expect(event.path?.split(path.delimiter)).not.toContain(productionBin);
     expect(event.reachability).toBe("off");
   }
 });

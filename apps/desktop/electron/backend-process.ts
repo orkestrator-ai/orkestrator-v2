@@ -1218,6 +1218,8 @@ export class BackendProcess {
     strictDockerOwner?: boolean;
     strictGatewayPort?: boolean;
     credentialSources?: AgentPlatform[];
+    /** Explicit inherited environment for a caller that has isolated it. */
+    inheritedEnv?: NodeJS.ProcessEnv;
     /** Exact agent tools port (`--agent-tools-port`); agent-test profiles only. */
     agentToolsPort?: number;
     /** False when no window will need terminal output from this client's stream. */
@@ -1234,37 +1236,9 @@ export class BackendProcess {
     return this.starting;
   }
 
-  private async launch(options: {
-    isDev: boolean;
-    appVersion?: string;
-    appRoot: string;
-    resourceRoot: string;
-    dataDir: string;
-    toolchainBinDir?: string;
-    rendererDevServerUrl?: string;
-    gatewayHost?: string;
-    gatewayPort?: number;
-    fallbackGatewayHost?: string;
-    allowNonTailscaleBind?: boolean;
-    desktopWebClient?: boolean;
-    /** This app can install updates; the backend accepts remote update requests. */
-    desktopUpdater?: boolean;
-    tailscaleExecutable?: string;
-    runtimeFlavor?: "production" | "development" | "agent-test";
-    runtimeProfileId?: string;
-    worktreeDir?: string;
-    dockerImage?: string;
-    strictDockerOwner?: boolean;
-    strictGatewayPort?: boolean;
-    credentialSources?: AgentPlatform[];
-    /** Exact agent tools port (`--agent-tools-port`); agent-test profiles only. */
-    agentToolsPort?: number;
-    /** False when no window will need terminal output from this client's stream. */
-    relayTerminalOutput?: boolean;
-    onEvent: (event: string, payload: unknown) => void;
-    onUnexpectedExit?: (error: Error, exit: BackendExitDiagnosis) => void;
-    onLogPolicyChanged?: BackendLogPolicyListener;
-  }): Promise<BackendHttpClient> {
+  private async launch(
+    options: Parameters<BackendProcess["start"]>[0],
+  ): Promise<BackendHttpClient> {
     const bun = options.isDev ? "bun" : path.join(options.resourceRoot, "bin", "bun");
     const entry = options.isDev
       ? path.join(options.appRoot, "apps", "backend", "src", "main.ts")
@@ -1324,8 +1298,9 @@ export class BackendProcess {
 
     // Isolate desktop startup from any remote-service configuration in the parent shell.
     const isolatedCredentialRoot = path.join(options.dataDir, "agent-credentials");
+    const inheritedEnv = options.inheritedEnv ?? process.env;
     const env = createBackendProcessEnvironment(
-      process.env,
+      inheritedEnv,
       options.appVersion,
       options.runtimeFlavor
         ? {
@@ -1338,7 +1313,7 @@ export class BackendProcess {
     if (options.runtimeFlavor === "agent-test") {
       await seedAgentTestDockerConfig({
         isolatedCredentialRoot,
-        sourceDir: hostDockerConfigDir(process.env),
+        sourceDir: hostDockerConfigDir(inheritedEnv),
       }).catch((error: unknown) => {
         desktopLog.warn("backend.docker-context-seed-failed", { error: formatLogError(error) });
       });
@@ -1346,6 +1321,7 @@ export class BackendProcess {
         desktopLog.warn("backend.keychain-link-remove-failed", { error: formatLogError(error) });
       });
     }
+    // The child environment's PATH also determines which development Bun runs.
     const child = spawn(bun, args, { env, stdio: ["ignore", "pipe", "pipe"] });
     this.child = child;
     // `exit` can precede the last stdout/stderr lines. Keep the drain wait

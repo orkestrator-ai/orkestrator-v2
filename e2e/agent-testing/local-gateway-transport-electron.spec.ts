@@ -362,7 +362,8 @@ async function runScenario(mode: Counts["mode"], temporaryRoot: string): Promise
       ],
       cwd: repositoryRoot,
       env: electronSpecEnvironment(
-        headless ? withoutDisplay(stack.electronEnv) : stack.electronEnv,
+        headless ? withoutDisplay(process.env) : process.env,
+        stack.electronOverrides,
       ),
     });
     recordElectronDiagnostics(app);
@@ -1021,7 +1022,8 @@ test("renderer Close application drains the backend before persisting the deskto
       ],
       cwd: repositoryRoot,
       env: electronSpecEnvironment(
-        headless ? withoutDisplay(stack.electronEnv) : stack.electronEnv,
+        headless ? withoutDisplay(process.env) : process.env,
+        stack.electronOverrides,
       ),
     });
     recordElectronDiagnostics(app);

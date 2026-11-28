@@ -2,10 +2,16 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+  CAPABILITY_SESSION_PLUGINS_DIRECTORY,
+  CAPABILITY_SESSION_PLUGINS_DIR_ENV,
+} from "@orkestrator/protocol/capability-resources";
+import { COORDINATOR_PROTECTED_DATA_DIR_ENV } from "@orkestrator/protocol/coordinator";
+import {
   defaultRuntimeProfileRoots,
   RUNTIME_APP_SLUG,
   type RuntimeProfileRoots,
 } from "@orkestrator/protocol/node/runtime-profile-status";
+import { canonicalWorktreePath } from "@orkestrator/protocol/node/worktree-paths";
 
 /**
  * The environment an agent-test profile inherits from whoever started it.
@@ -124,23 +130,44 @@ function productionDataDirs(base: NodeJS.ProcessEnv, options: ProfileEnvironment
     options.roots ??
     (platform === "win32" ? undefined : defaultRuntimeProfileRoots(platform, base));
   const homeDir = options.roots?.homeDir ?? os.homedir();
-  // The canonical locations as well as the resolved one: a Linux shell with a
-  // custom XDG_CONFIG_HOME may still name the default directory.
+  // The backend also advertises storage-derived paths to host agents when its
+  // data directory came from --data-dir instead of the environment.
+  const pluginsDir = base[CAPABILITY_SESSION_PLUGINS_DIR_ENV];
+  const hostAgentDataDir =
+    pluginsDir &&
+    path.isAbsolute(pluginsDir) &&
+    path.basename(pluginsDir) === CAPABILITY_SESSION_PLUGINS_DIRECTORY
+      ? path.dirname(pluginsDir)
+      : undefined;
   const candidates = [
+    base.ORKESTRATOR_DATA_DIR,
+    base[COORDINATOR_PROTECTED_DATA_DIR_ENV],
+    hostAgentDataDir,
     roots?.productionDataDir,
     path.join(homeDir, "Library", "Application Support", RUNTIME_APP_SLUG),
     path.join(homeDir, ".config", RUNTIME_APP_SLUG),
-  ].filter((entry): entry is string => Boolean(entry));
-  return [...new Set(candidates.map((entry) => path.resolve(entry)))];
+  ].filter((entry): entry is string => Boolean(entry?.trim()));
+  return [...new Set(candidates.flatMap((entry) => pathIdentities(expandHome(entry, homeDir))))];
 }
 
 function isSameOrInside(candidate: string, root: string): boolean {
   const relative = path.relative(root, candidate);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
 }
 
 function expandHome(value: string, homeDir: string): string {
   return value === "~" || value.startsWith("~/") ? path.join(homeDir, value.slice(1)) : value;
+}
+
+function pathIdentities(value: string): string[] {
+  const lexical = path.resolve(value);
+  try {
+    const canonical = canonicalWorktreePath(value);
+    return canonical === lexical ? [lexical] : [lexical, canonical];
+  } catch {
+    // An inaccessible or malformed path still gets the lexical check.
+    return [lexical];
+  }
 }
 
 /** Whether any `:`-separated absolute path in `value` lies inside a data directory. */
@@ -148,17 +175,23 @@ function pointsIntoDataDir(value: string, dataDirs: readonly string[], homeDir: 
   return value.split(path.delimiter).some((segment) => {
     const expanded = expandHome(segment.trim(), homeDir);
     if (!path.isAbsolute(expanded)) return false;
-    const resolved = path.resolve(expanded);
-    return dataDirs.some((root) => isSameOrInside(resolved, root));
+    return pathIdentities(expanded).some((candidate) =>
+      dataDirs.some((root) => isSameOrInside(candidate, root)),
+    );
   });
 }
 
-/** Whether `value` is, or addresses, one of the installed app's ports. */
-function addressesReservedPort(value: string): boolean {
+/** Check endpoint ports and bare numbers in settings that name a port. */
+function addressesReservedPort(name: string, value: string): boolean {
   const trimmed = value.trim();
-  return RESERVED_PORTS.some(
-    (port) => trimmed === port || new RegExp(`:${port}(?![0-9])`).test(trimmed),
-  );
+  if (/^\d+$/.test(trimmed)) {
+    return (
+      /(?:^|_)PORT$/.test(name) && RESERVED_PORTS.some((port) => Number(port) === Number(trimmed))
+    );
+  }
+  const endpoint = /^(?:\[[^\]]+\]|[^:/?#@\s]+):\d+$/.test(trimmed) ? `http://${trimmed}` : trimmed;
+  const port = URL.parse(endpoint)?.port;
+  return RESERVED_PORTS.some((reserved) => reserved === port);
 }
 
 /** Whether `name` is a documented knob the profile keeps. */
@@ -222,7 +255,7 @@ export function scrubProfileEnvironment(
     }
     const risky =
       (!PATH_CHECK_EXEMPT.has(name) && pointsIntoDataDir(value, dataDirs, homeDir)) ||
-      addressesReservedPort(value);
+      addressesReservedPort(name, value);
     if (risky && isKeptProfileKnob(name)) {
       refused.push(name);
       continue;

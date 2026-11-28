@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import {
@@ -127,6 +128,56 @@ describe("scrubProfileEnvironment", () => {
     expect(scrub.dropped).toEqual([]);
   });
 
+  test("filters both spellings of a configured data directory and provider or toolchain aliases", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "ork-profile-env-"));
+    try {
+      const production = path.join(root, "production");
+      const productionAlias = path.join(root, "production-alias");
+      const account = path.join(production, "agent-accounts", "..claude");
+      const accountAlias = path.join(root, "account-alias");
+      const ownHome = path.join(root, "own-home");
+      const ownHomeAlias = path.join(root, "own-home-alias");
+      mkdirSync(account, { recursive: true });
+      mkdirSync(ownHome);
+      symlinkSync(production, productionAlias, "dir");
+      symlinkSync(account, accountAlias, "dir");
+      symlinkSync(ownHome, ownHomeAlias, "dir");
+      const tools = path.join(production, "toolchains", "bin");
+      const scrub = scrubProfileEnvironment(
+        {
+          ORKESTRATOR_DATA_DIR: productionAlias,
+          CLAUDE_CONFIG_DIR: accountAlias,
+          CODEX_HOME: path.join(productionAlias, "codex"),
+          PI_CODING_AGENT_DIR: ownHomeAlias,
+          PATH: [path.join(productionAlias, "toolchains", "bin"), tools, "/usr/bin"].join(
+            path.delimiter,
+          ),
+        },
+        options,
+      );
+      expect(scrub.dropped).toEqual(["CLAUDE_CONFIG_DIR", "CODEX_HOME", "ORKESTRATOR_DATA_DIR"]);
+      expect(scrub.env).toEqual({ PATH: "/usr/bin", PI_CODING_AGENT_DIR: ownHomeAlias });
+      expect(scrub.droppedPathEntries).toBe(2);
+
+      expect(scrubProfileEnvironment({ CLAUDE_CONFIG_DIR: ownHomeAlias }, options).env).toEqual({
+        CLAUDE_CONFIG_DIR: ownHomeAlias,
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test.each([
+    { ORKESTRATOR_CAPABILITY_SESSION_PLUGINS_DIR: "/custom-data/capability-session-plugins" },
+    { ORKESTRATOR_COORDINATOR_PROTECTED_DATA_DIR: "/custom-data" },
+  ])("recognises storage paths supplied by the host bridge", (parent) => {
+    const scrub = scrubProfileEnvironment(
+      { ...parent, CLAUDE_CONFIG_DIR: "/custom-data/accounts/claude" },
+      options,
+    );
+    expect(scrub.dropped).toContain("CLAUDE_CONFIG_DIR");
+  });
+
   test("drops an unlisted variable that addresses an installed app port", () => {
     expect(
       scrubProfileEnvironment({ SOME_PROXY: "http://localhost:34121/" }, options).dropped,
@@ -160,6 +211,19 @@ describe("scrubProfileEnvironment", () => {
     );
     expect(message).not.toContain(secretPath);
     expect(message).not.toContain("45507/");
+  });
+
+  test("keeps a duration that matches a reserved port and still refuses endpoints", () => {
+    const duration = { ORKESTRATOR_DEV_PROCESS_MEMORY_MS: "45507" };
+    expect(scrubProfileEnvironment(duration, options).env).toEqual(duration);
+    expect(() =>
+      scrubProfileEnvironment(
+        { ...duration, ORKESTRATOR_AGENT_TEST_USAGE_ORIGIN: "http://[::1]:45507/" },
+        options,
+      ),
+    ).toThrow(/ORKESTRATOR_AGENT_TEST_USAGE_ORIGIN points/);
+    const safeOrigin = { ORKESTRATOR_AGENT_TEST_USAGE_ORIGIN: "http://localhost:8080/path:45507" };
+    expect(scrubProfileEnvironment(safeOrigin, options).env).toEqual(safeOrigin);
   });
 });
 
@@ -199,6 +263,7 @@ describe("isKeptProfileKnob", () => {
     const setByTheProfile = new Set([
       "ORKESTRATOR_AGENT_MCP_URL",
       "ORKESTRATOR_ENVIRONMENT_ID",
+      "ORKESTRATOR_DATA_DIR",
       "ORKESTRATOR_RENDERER_DEV_SERVER_URL",
       "ORKESTRATOR_VERSION",
       "ORKESTRATOR_WORKTREE_DIR",

@@ -762,8 +762,9 @@ seeds the profile or starts Vite and Electron (and so the backend and its
 bridges), so you no longer need to unset anything by hand
 (`apps/desktop/scripts/dev/profile-environment.ts`). The one-shot runners
 (`test:agent:*`, through `runIsolatedBrowser`) scrub their launchers' and
-Playwright's environment the same way, and every Electron spec's environment
-(`electronSpecEnvironment`) starts from the scrubbed one. `dev:login`,
+Playwright's environment the same way. Electron specs scrub the runner's
+environment before applying fixture settings for Electron and for backends
+started directly by a spec. `dev:login`,
 `dev:status`, `dev:stop` and `dev:reset` start no profile process, so there is
 nothing for them to pass on.
 
@@ -777,9 +778,12 @@ What is dropped:
   the agent MCP URL and token, `ORKESTRATOR_ENVIRONMENT_ID`, the port range,
   `ORKESTRATOR_VERSION` and the `ORKESTRATOR_AGENT_TEST_HOST_*` values a parent
   profile's backend sets.
-- Any other variable whose value is a path inside the production data
-  directory or addresses port 34121, 34122 or 45507, and the matching `PATH`
-  entries.
+- Paths inside the production data directory, including matching `PATH`
+  entries and symlink aliases. The check includes the standard locations,
+  a custom `ORKESTRATOR_DATA_DIR` and storage paths advertised by the parent
+  agent bridge.
+- Endpoints on port 34121, 34122 or 45507, and bare numbers matching those
+  ports in port settings. A duration can use the same number.
 
 What is kept: `ORKESTRATOR_HOST_REACHABILITY_CHECK`, `ORKESTRATOR_LOG_LEVEL`
 and the other single knobs this guide documents, every `ORKESTRATOR_AGENT_TEST_*`,

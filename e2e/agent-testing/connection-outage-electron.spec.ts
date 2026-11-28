@@ -114,30 +114,21 @@ test("a remote connection shows the banner, pauses reads and recovers, on a rest
   let remote = new BackendProcess();
   const startRemote = async () => {
     const backend = new BackendProcess();
-    const controlPort = process.env.ORKESTRATOR_CONTROL_MCP_PORT;
-    process.env.ORKESTRATOR_CONTROL_MCP_PORT = "0";
-    try {
-      await startElectronSpecBackend(() =>
-        backend.start({
-          isDev: true,
-          appRoot: repositoryRoot,
-          resourceRoot: repositoryRoot,
-          dataDir: remoteProfile.dataDir,
-          gatewayHost: "127.0.0.1",
-          gatewayPort: remotePort,
-          allowNonTailscaleBind: true,
-          runtimeFlavor: "agent-test",
-          runtimeProfileId: remoteProfile.id,
-          worktreeDir: remoteProfile.worktreeDir,
-          strictGatewayPort: true,
-          strictDockerOwner: true,
-          onEvent: () => undefined,
-        }),
-      );
-    } finally {
-      if (controlPort === undefined) delete process.env.ORKESTRATOR_CONTROL_MCP_PORT;
-      else process.env.ORKESTRATOR_CONTROL_MCP_PORT = controlPort;
-    }
+    await startElectronSpecBackend(backend, {
+      isDev: true,
+      appRoot: repositoryRoot,
+      resourceRoot: repositoryRoot,
+      dataDir: remoteProfile.dataDir,
+      gatewayHost: "127.0.0.1",
+      gatewayPort: remotePort,
+      allowNonTailscaleBind: true,
+      runtimeFlavor: "agent-test",
+      runtimeProfileId: remoteProfile.id,
+      worktreeDir: remoteProfile.worktreeDir,
+      strictGatewayPort: true,
+      strictDockerOwner: true,
+      onEvent: () => undefined,
+    });
     return backend;
   };
   try {

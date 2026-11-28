@@ -8,7 +8,6 @@ import { ownProcessGroup } from "../process-cleanup";
 import { withStartingProcess } from "./local-gateway-transport-lifecycle";
 import { recordProcessOutput } from "./electron-diagnostics";
 import { expect } from "./electron-fixtures";
-import { electronSpecEnvironment } from "./electron-spec-environment";
 import { seedLocalWindowTransport } from "./local-window-transport-config";
 
 /**
@@ -49,8 +48,8 @@ export type TransportStack = {
   rendererUrl: string;
   /** Owned process group; stop it with `stopProcessGroup`. */
   vite: ChildProcess;
-  /** The environment for an Electron main on this profile's Vite renderer. */
-  electronEnv: Record<string, string>;
+  /** Spec-owned values to apply after scrubbing at the Electron launch. */
+  electronOverrides: Record<string, string>;
 };
 
 /** A fresh profile under `root` with the transport setting for `mode`, and its Vite. */
@@ -102,11 +101,11 @@ export async function startTransportStack(
       projectPath,
       rendererUrl,
       vite,
-      electronEnv: electronSpecEnvironment(process.env, {
+      electronOverrides: {
         ELECTRON_DEV: "1",
         VITE_DEV_SERVER_URL: rendererUrl,
         ORKESTRATOR_RUNTIME_PROFILE_FILE: profilePath,
-      }),
+      },
     };
   });
 }

@@ -6,7 +6,6 @@ import { parseSync, visitorKeys, type Node } from "oxc-parser";
 import {
   HOST_REACHABILITY_CHECK_ENV,
   electronSpecEnvironment,
-  startElectronSpecBackend,
 } from "../../e2e/agent-testing/electron-spec-environment";
 import { packagedLaunchEnvironment } from "../../e2e/agent-testing/packaged-electron-app";
 
@@ -112,48 +111,29 @@ describe("electronSpecEnvironment", () => {
     expect(env[HOST_REACHABILITY_CHECK_ENV]).toBe("off");
   });
 
-  test("direct backend initial start and restart capture off and restore the runner", async () => {
-    const original = process.env[HOST_REACHABILITY_CHECK_ENV];
-    const captured: (string | undefined)[] = [];
-    try {
-      process.env[HOST_REACHABILITY_CHECK_ENV] = "on";
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        const pending = startElectronSpecBackend(() => {
-          captured.push(process.env[HOST_REACHABILITY_CHECK_ENV]);
-          return Promise.resolve();
-        });
-        expect(process.env[HOST_REACHABILITY_CHECK_ENV]).toBe("on");
-        await pending;
-      }
-      expect(captured).toEqual(["off", "off"]);
-      expect(() =>
-        startElectronSpecBackend(() => {
-          throw new Error("spawn failed");
-        }),
-      ).toThrow("spawn failed");
-      expect(process.env[HOST_REACHABILITY_CHECK_ENV]).toBe("on");
-      delete process.env[HOST_REACHABILITY_CHECK_ENV];
-      startElectronSpecBackend(() => undefined);
-      expect(process.env[HOST_REACHABILITY_CHECK_ENV]).toBeUndefined();
-    } finally {
-      if (original === undefined) delete process.env[HOST_REACHABILITY_CHECK_ENV];
-      else process.env[HOST_REACHABILITY_CHECK_ENV] = original;
-    }
+  test("uses the transport stack's fixture profile in place of an inherited profile", () => {
+    const base = { ORKESTRATOR_RUNTIME_PROFILE_FILE: "/foreign/profile.json" };
+    expect(electronSpecEnvironment(base).ORKESTRATOR_RUNTIME_PROFILE_FILE).toBeUndefined();
+    expect(
+      electronSpecEnvironment(base, {
+        ORKESTRATOR_RUNTIME_PROFILE_FILE: "/fixture/profile.json",
+      }).ORKESTRATOR_RUNTIME_PROFILE_FILE,
+    ).toBe("/fixture/profile.json");
   });
 
-  test("direct disposable Electron backends explicitly disable the probe", () => {
+  test("direct disposable Electron backends use the scrubbed start helper", () => {
+    const offenders: string[] = [];
+    let starts = 0;
     for (const file of readdirSync(agentTesting)) {
       if (!file.includes("electron") || !file.endsWith(".spec.ts")) continue;
-      const source = readFileSync(path.join(agentTesting, file), "utf8");
-      for (const match of source.matchAll(/const (\w+) = new BackendProcess\(\)/g)) {
-        const name = match[1]!;
-        expect(
-          source.replace(/\s+/g, "").includes(`startElectronSpecBackend(()=>${name}.start(`) ||
-            (source.includes("await withEnvironment(") &&
-              source.includes('ORKESTRATOR_HOST_REACHABILITY_CHECK: "off"')),
-        ).toBe(true);
+      const source = readFileSync(path.join(agentTesting, file), "utf8").replace(/\s+/g, "");
+      for (const match of source.matchAll(/const(\w+)=newBackendProcess\(\)/g)) {
+        starts += 1;
+        if (!source.includes(`startElectronSpecBackend(${match[1]},`)) offenders.push(file);
       }
     }
+    expect(starts).toBeGreaterThanOrEqual(2);
+    expect(offenders).toEqual([]);
   });
 
   test("the guard finds every launch's options", () => {

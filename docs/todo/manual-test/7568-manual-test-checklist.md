@@ -160,6 +160,12 @@ task 2 to 4 results are recorded). Each decision is under its item and in
 its source to-do where one exists. The decisions count went from 20 to 17;
 the task line's 21 was one ahead of the table.
 
+Updated 2026-11-28: the user decided 0039 task 10 (MCP apply stays on for
+all six providers); its item is ticked with the decision. The Grok live
+item stays open only for the user-scope edit, rename and restore cells,
+which wait on 0039 task 17, the busy-check fix. This brings the open
+decisions count to 16.
+
 ### Tasks
 
 1. **Manual tests and live checks** (369 items): run each check under
@@ -167,7 +173,7 @@ the task line's 21 was one ahead of the table.
 
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
    its result. Status: open.
-2. **Decisions, approvals and outward actions** (17 items): make each call
+2. **Decisions, approvals and outward actions** (16 items): make each call
    or take each action under
    [Decisions, approvals and outward actions](#decisions-approvals-and-outward-actions)
    and record it. Status: open.
@@ -347,10 +353,10 @@ agent can apply it.
 | Coordinator and Multi Review | 87 | 3 |
 | Cross-cutting | 106 | 7 |
 | Design canvas | 5 | 0 |
-| MCP | 8 | 1 |
+| MCP | 8 | 0 |
 | Service previews and web annotations | 18 | 1 |
 | Transcripts, observation and bandwidth | 31 | 1 |
-| **Total** | 369 | 17 |
+| **Total** | 369 | 16 |
 
 
 
@@ -899,13 +905,21 @@ profile with `mise run dev:stop --profile perm-rules-<agent>`, then
 
 #### MCP
 
-- [ ] **[0039](../mcp/0039-mcp-management.md) task 4: Grok live MCP apply probes and the untrusted-project check.** On a macOS node, sign in to Grok on the host (the host login expired on 2026-10-19). Start a fresh profile that takes a snapshot of that login: `mise run dev:test --profile <profile> --fixture --credential-source grok --agent-platforms grok --headless`. Run the live apply spec for Grok only: `ORKESTRATOR_AGENT_TEST_PROFILE=<profile> ORKESTRATOR_AGENT_TEST_LIVE_MCP=1 ORKESTRATOR_AGENT_TEST_MCP_PROVIDERS=grok bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/mcp-apply-live.spec.ts`. It covers the user and project scopes, saved `enabled` and SSE. Then, in a session in the same profile, check the untrusted gate:
-  - add a project `.grok/config.toml` server in the environment's worktree, with project resources off and no `[folders."<path>"] trusted = true` grant;
-  - start a Grok session there and read its live MCP inventory in the panel, and the probe server's own log.
+- [ ] **[0039](../mcp/0039-mcp-management.md) task 4: Grok live MCP apply user-scope follow-up.** This item stays open for the edit, rename-to-v2 and restore cells. Once [0039 task 17](../mcp/0039-mcp-management.md#17-groks-shell-tool-in-the-mcp-apply-harness-busy-check) lands and you approve the billed rerun, sign in to Grok on the macOS host and start a fresh disposable profile with `mise run dev:test --profile grok-mcp-live-user --fixture --credential-source grok --agent-platforms grok --headless`. With the profile ready, run the user-scope spec:
 
-  Record in 0039's evidence, as a new "Live apply record: Grok" section: the per-scope pass/fail and the apply outcomes. The expected outcome is `restart-required`, then `applied` after the bridge process is replaced. Also record the path of `output/agent-testing/<run>/mcp-apply-live/grok.json`, and whether the untrusted session listed or started the project server (expected: not started, matching `grok mcp doctor`).
+  ```bash
+  ORKESTRATOR_AGENT_TEST_PROFILE=grok-mcp-live-user \
+  ORKESTRATOR_AGENT_TEST_LIVE_MCP=1 \
+  ORKESTRATOR_AGENT_TEST_MCP_PROVIDERS=grok \
+  ORKESTRATOR_AGENT_TEST_MCP_SCOPES=backend-user \
+  mise run test:logged -- --name grok-mcp-live-user -- bunx playwright test \
+    --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/mcp-apply-live.spec.ts
+  ```
 
-  Run on 2026-11-26 on mbp3 after the user signed in (profile `grok-mcp-live-4`, Grok Build 1.0.88, `main` at `76cd71b58`; [record](../mcp/0039-mcp-management.md#live-apply-record-grok-2026-11-26)): exit 1 with 9 failures, every one from two harness gaps, none from apply. Both scopes went `restart-required`, then `applied` after the bridge restart. The project scope passed on runtime evidence; the user scope is partial, because the busy check does not recognise Grok's `run_terminal_command` shell tool, so the edit never saved and its rename-to-v2 and restore checks are unproven. Saved `enabled` and SSE were not exercised (the Grok target reports both unsupported). The untrusted project server was not started (no probe log, null inventory, `grok mcp doctor`: "folder untrusted"), though the management snapshot listed it as `effective`. This item stays open for the user-scope edit cells once the busy check knows Grok's shell tool.
+  Record the three cells' pass or fail, the apply outcomes and the `output/agent-testing/<run>/mcp-apply-live/grok.json` path in 0039's Grok record. Expect `restart-required`, then `applied` after the bridge process is replaced. When finished, run `mise run dev:stop --profile grok-mcp-live-user` and then `mise run dev:reset --profile grok-mcp-live-user`.
+
+  Run on 2026-11-26 on mbp3 after the user signed in (profile `grok-mcp-live-4`, Grok Build 1.0.88, `main` at `76cd71b58`; [record](../mcp/0039-mcp-management.md#live-apply-record-grok-2026-11-26)): exit 1 with 9 failures, every one from two harness gaps, none from apply. Both scopes went `restart-required`, then `applied` after the bridge restart. The project scope passed on runtime evidence; the user scope is partial, because the busy check does not recognise Grok's `run_terminal_command` shell tool, so the edit never saved and its rename-to-v2 and restore checks are unproven. Saved `enabled` and SSE were not exercised (the Grok target reports both unsupported). The untrusted project server was not started (no probe log, null inventory, `grok mcp doctor`: "folder untrusted"), though the management snapshot listed it as `effective` (now [0039 task 18](../mcp/0039-mcp-management.md#18-untrusted-grok-project-rows-shown-as-effective), an agent's task). The apply decision this run fed (0039 task 10) was made on 2026-11-28: apply stays on for Grok.
+
 - [ ] **[0039](../mcp/0039-mcp-management.md) task 7: inactive-environment spec in full mode on a real model.** Billed. Both specs passed on the loopback fake model on 2026-11-06; this proves a real model's tool calls after the edit, the removal, a bridge restart and the shared save. In a disposable profile with a Claude login that is not rate limited (`mise run dev:test --profile <profile> --fixture --credential-source claude --agent-platforms claude --headless`), run `ORKESTRATOR_AGENT_TEST_PROFILE=<profile> ORKESTRATOR_AGENT_TEST_LIVE_MCP=1 mise run test:logged -- --name mcp-inactive-real -- bunx playwright test --config e2e/agent-testing/playwright.browser.config.ts e2e/agent-testing/mcp-apply-inactive.spec.ts --workers=1 --trace off` (no `ORKESTRATOR_AGENT_TEST_MCP_APPLY_ONLY`, no `ORKESTRATOR_AGENT_TEST_MCP_FAKE_MODEL`). Optionally repeat with a Codex login and `mcp-apply-inactive-codex.spec.ts`. Record: the date, CLI versions, models, pass/fail per spec and the marker-file counts the spec reports, in 0039's "Qualification" (inactive environment).
 - [ ] **[0039](../mcp/0039-mcp-management.md) task 12: a running Claude account session sees an editor save.** Needs a real Claude login on an added agent account. In a disposable profile, add a Claude account in Settings (under the provider's accounts) and sign it in, then start a short Claude session on that account. In Settings → MCP, add a server to `claude:user`; send a turn and check in the agent panel that the running CLI loaded it. Remove it and send another turn: it is gone. Then let the CLI idle out (10 minutes) and send a turn: the removed server does not come back. Finally add a server only to the account's own `.claude.json` copy and check the panel reports it stale and refuses its tools. Check the source header shows the "Added Claude accounts use their own copy" note. Record: the date, the Claude CLI version and pass/fail per check, in 0039's task 12 ("Not proven").
 - [ ] **[0039](../mcp/0039-mcp-management.md) task 13: Claude MCP reconnect on a running CLI with a real login.** Billed. The fake-model case passed on 2026-11-06 (`mcp-ui-matrix.spec.ts` skips it on a profile with a Claude credential, so this run is by hand). In a disposable profile with a real Claude login (`mise run dev:test --profile <profile> --fixture --credential-source claude --agent-platforms claude --headless`), give a fixture environment a `.mcp.json` with one healthy and one failing stdio server. Send a short turn so the CLI stays warm, fix the failing server and reconnect its row: the whole list comes from the live session, the `orkestrator` row is kept, the layers read `project` and `orkestrator`, and the open panel refreshes without a reload. Wait for the idle release (10 minutes), reconnect the row again (it runs through a probe), send another turn, and hard-reload: the running CLI's report replaces the list and it is still right after the reload. Record: the date, the Claude CLI version and pass/fail per step, in 0039's task 13.
@@ -1062,13 +1076,15 @@ None open (both answered on 2026-11-14).
 
 #### MCP
 
-- [ ] **[0039](../mcp/0039-mcp-management.md) task 10: release decision on the all-on MCP management default.** Decide whether to keep `DEFAULT_MCP_MANAGEMENT_ROLLOUT` (`packages/protocol/src/mcp-management.ts`, all providers on for write and apply) or narrow some providers to write-only. Make the decision after the Grok (task 4) item above. The recommended option is to keep all-on for Claude, Codex, OpenCode, Cursor and Pi, and decide Grok apply from its run, narrowing it to write-only if it fails. Use these results.
+- [x] **[0039](../mcp/0039-mcp-management.md) task 10: release decision on the all-on MCP management default.** Decide whether to keep `DEFAULT_MCP_MANAGEMENT_ROLLOUT` (`packages/protocol/src/mcp-management.ts`, all providers on for write and apply) or narrow some providers to write-only. Make the decision after the Grok (task 4) item above. The recommended option is to keep all-on for Claude, Codex, OpenCode, Cursor and Pi, and decide Grok apply from its run, narrowing it to write-only if it fails. Use these results.
   - The loopback fake-model runs passed every probe cell for Claude, Codex and Pi on 2026-11-06 and for OpenCode on 2026-11-10.
   - Pi 1.5.2 passed every probe in both scopes on a real login on 2026-11-26, with `pending-next-turn` → `applied` per probed tab. See [0039's real-login record](../mcp/0039-mcp-management.md#live-apply-record-cursor-and-pi-on-real-logins-2026-11-26).
   - Cursor reported `pending-next-turn` → `applied` in both scopes on a real login on 2026-11-26, and 14 of 15 probes passed. The user-removal probe on tab B reached no server with its nonce, and the panel omitted the removed name. The exact-match rule rejected its reply, which ended with `MCPQ-UNAVAILABLE` after narration on the same line. The panel evidence leaves tool availability inconclusive. See [0039's real-login record](../mcp/0039-mcp-management.md#live-apply-record-cursor-and-pi-on-real-logins-2026-11-26).
   - Grok 1.0.88 reported `restart-required` → `applied` in both scopes on a real login on 2026-11-26. The project scope passed on runtime evidence; the user scope's edit, rename-to-v2 and restore cells are unproven because the harness's busy check missed Grok's shell tool, and the six "must fail" probes logged no call but were rejected by the same exact-match rule as Cursor's. The untrusted project server was not started. See [0039's Grok record](../mcp/0039-mcp-management.md#live-apply-record-grok-2026-11-26).
 
   Record: the decision and the provider lists, in 0039's "Assumptions and decisions". If you narrow, reply to the coordinator so an agent can make the one-line default change.
+
+  Decided 2026-11-28 by the user: MCP apply stays on for every provider (Claude, Codex, OpenCode, Cursor, Pi and Grok), so `DEFAULT_MCP_MANAGEMENT_ROLLOUT` is unchanged and nothing is narrowed to write-only. Recorded in [0039 task 10](../mcp/0039-mcp-management.md#10-release-decision-on-the-all-on-mcp-management-default) with the options rejected; the harness gaps the runs found are 0039 tasks 16 and 17, the Cursor and Grok snapshot findings tasks 15 and 18.
 
 #### Service previews and web annotations
 

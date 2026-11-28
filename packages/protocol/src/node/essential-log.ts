@@ -1,6 +1,6 @@
 import { appendFileSync, renameSync, statSync, unlinkSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
-import { createEssentialLogLock } from "./essential-log-lock.js";
+import { createProcessOwnerLock } from "./process-owner-lock.js";
 import path from "node:path";
 
 import { essentialLogTransactionFactory } from "./essential-log-transaction.js";
@@ -78,6 +78,8 @@ export type InstalledEssentialLog = {
   flush(): Promise<void>;
   /** Bounded synchronous drain for immediate app.exit(), which skips will-quit. */
   flushSync(): void;
+  /** Leave an overdue async drain to the worker when exit has a hard deadline. */
+  disableExitFlush(): void;
   /** Detaches from the logger and reports whether `essential.stopped` was appended. */
   stop(): Promise<boolean>;
 };
@@ -101,7 +103,7 @@ export function installEssentialLog(options: {
   const bounds: EssentialLogBounds = { ...DEFAULT_ESSENTIAL_LOG_BOUNDS, ...options.bounds };
   const now = options.now ?? (() => new Date());
   const io: EssentialLogIo = { appendFileSync, renameSync, statSync, unlinkSync, ...options.io };
-  const tryLock = createEssentialLogLock(directory);
+  const tryLock = createProcessOwnerLock(directory, "writer");
   const logs = createLogger("logging");
 
   const queue: Buffer[] = [];
@@ -352,6 +354,9 @@ export function installEssentialLog(options: {
     directory,
     flush,
     flushSync: drainOnExit,
+    disableExitFlush: () => {
+      process.off("exit", drainOnExit);
+    },
     stop() {
       if (stopResult) return stopResult;
       configureLogger({ essentialSink: null });

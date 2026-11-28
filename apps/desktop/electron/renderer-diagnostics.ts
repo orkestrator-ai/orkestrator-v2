@@ -53,8 +53,9 @@ export function installRendererDiagnostics(contents: Pick<WebContents, "mainFram
       : "unknown";
     record(`renderer-gone:${reason}`, () => startupLog.info("renderer-gone", { reason }));
   });
-  contents.on("will-prevent-unload", () => {
-    record("beforeunload", () => dialogLog.info("renderer-beforeunload-cancelled"));
+  contents.on("will-prevent-unload", (event) => {
+    if (!event.defaultPrevented)
+      record("beforeunload", () => dialogLog.info("renderer-beforeunload-cancelled"));
   });
   contents.on("console-message", ({ frame, message }) => {
     if (frame !== contents.mainFrame) return;

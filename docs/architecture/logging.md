@@ -538,6 +538,7 @@ along. The `source` a relay adds is kept only as a known provider plus an enviro
 | `desktop` | `backend.exited-recovering` | the same | The same, just after a remote update. |
 | `desktop` | `backend.start-failed` | error (including `code` and `syscall` when available) | Local failed during startup, including when the backend executable could not be spawned. |
 | `desktop` | `uncaught-exception` | error | The main process hit an uncaught exception. |
+| `desktop` | `quit.signal-received` | `signal`, `backendWaitMs`, `quitAlreadyRequested` | The desktop received SIGTERM or SIGHUP. The backend drain gets at most 3 s from receipt, with less time if the existing backend hold would end sooner. `quitAlreadyRequested` records whether an earlier request reached Electron's `before-quit`. The log holds release by 4.5 s from the signal. Later signals emit `quit.signal-repeated` in the application log. |
 | `local-server` | `bridge.started` | `key`, `pid` | A local bridge was spawned. `key` is `kind:environmentId`. |
 | `local-server` | `bridge.exited` | `key`, `pid`, `code`, `signal`, `requested` | A local bridge exited. |
 | `local-server` | `bridge.orphans-reaped` | `key`, `pid`, `result` | What a bridge left in its group after exiting on its own was stopped. |

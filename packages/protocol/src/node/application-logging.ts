@@ -735,7 +735,7 @@ export type ApplicationLoggingQuitHost = {
  */
 export function registerApplicationLoggingShutdown(
   app: ApplicationLoggingQuitHost,
-  logging: InstalledApplicationLogging | null,
+  logging: Pick<InstalledApplicationLogging, "stop"> | null,
   timeoutMs = LOG_SHUTDOWN_FLUSH_MS,
   /**
    * Output that must reach the log first, bounded by its own timeout: the
@@ -743,6 +743,8 @@ export function registerApplicationLoggingShutdown(
    * parallel, so closing the log at once dropped exactly how the quit ended.
    */
   pending?: { settled: () => Promise<unknown>; timeoutMs: number },
+  /** An optional process-wide deadline that also bounds the log flush itself. */
+  quitDeadline?: Promise<void>,
 ): void {
   if (!logging) return;
   registerWillQuitHold(
@@ -762,12 +764,13 @@ export function registerApplicationLoggingShutdown(
       await logging.stop();
     },
     timeoutMs + (pending?.timeoutMs ?? 0),
+    quitDeadline,
   );
 }
 
 /**
- * Holds `will-quit` open until `settle` finishes or `timeoutMs` passes, then
- * re-issues the quit on a later macrotask (see above for why it must be later).
+ * Holds `will-quit` open until `settle` finishes or either deadline expires.
+ * Re-issues the quit on a later macrotask (see above for why it must be later).
  *
  * Several holds may be registered. One that releases first re-issues the quit
  * while another is still settling, so a hold keeps preventing every `will-quit`
@@ -777,6 +780,7 @@ export function registerWillQuitHold(
   app: ApplicationLoggingQuitHost,
   settle: () => Promise<unknown>,
   timeoutMs: number,
+  quitDeadline?: Promise<void>,
 ): void {
   let state: "idle" | "holding" | "released" = "idle";
   app.on("will-quit", (event) => {
@@ -789,7 +793,9 @@ export function registerWillQuitHold(
       timer = setTimeout(resolve, timeoutMs);
       timer.unref?.();
     });
-    void Promise.race([settle().catch(() => {}), deadline]).finally(() => {
+    const outcomes = [settle().catch(() => {}), deadline];
+    if (quitDeadline) outcomes.push(quitDeadline);
+    void Promise.race(outcomes).finally(() => {
       if (timer) clearTimeout(timer);
       state = "released";
       setTimeout(() => app.quit(), 0);

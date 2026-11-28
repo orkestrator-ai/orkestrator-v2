@@ -4,13 +4,13 @@ import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createEssentialLogLock } from "./essential-log-lock.js";
+import { createProcessOwnerLock } from "./process-owner-lock.js";
 
 test("a live lock cannot be stolen; dead and interrupted owners recover safely", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "essential-lock-"));
   try {
-    const acquire = createEssentialLogLock(root);
-    const contender = createEssentialLogLock(root);
+    const acquire = createProcessOwnerLock(root, "writer");
+    const contender = createProcessOwnerLock(root, "writer");
     const release = acquire();
     expect(release).not.toBeNull();
     expect(contender()).toBeNull();

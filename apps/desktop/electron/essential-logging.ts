@@ -4,6 +4,7 @@ import {
   installEssentialLog,
   type InstalledEssentialLog,
 } from "@orkestrator/protocol/node/essential-log";
+import type { SignalQuitDeadlines } from "./quit-signals.js";
 import { claimSingleInstanceLock } from "./single-instance.js";
 
 const log = createLogger("desktop");
@@ -58,22 +59,24 @@ export function registerEssentialShutdown(options: {
   backendStopped(): Promise<void>;
   essentialLog: Pick<InstalledEssentialLog, "stop">;
   timeoutMs: number;
+  signalQuit?: SignalQuitDeadlines;
   relaunchImage(image: string): void;
 }): { quitForUpdate(image: string): void; updatePending(): boolean } {
-  const { app, backendStopped, essentialLog, timeoutMs, relaunchImage } = options;
+  const { app, backendStopped, essentialLog, timeoutMs, signalQuit, relaunchImage } = options;
   let updateImage: string | undefined;
   let confirmed = false;
-  registerWillQuitHold(
-    app,
-    async () => {
+  let stopping: Promise<void> | undefined;
+  const stop = () =>
+    (stopping ??= (async () => {
       const drained = await backendStopped().then(
         () => true,
         () => false,
       );
       confirmed = (await essentialLog.stop()) && drained;
-    },
-    timeoutMs,
-  );
+    })());
+  registerWillQuitHold(app, stop, timeoutMs, signalQuit?.holdsExpired);
+  // Start the marker even if a window is slow to reach will-quit.
+  void signalQuit?.started.then(stop).catch(() => undefined);
 
   app.on("quit", (_event, code) => {
     if (!updateImage || code !== 0) return;

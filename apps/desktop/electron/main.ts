@@ -26,7 +26,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { LOCAL_CONNECTION_ID } from "@orkestrator/protocol/connections";
 import { BackendProcess, type BackendHttpClient } from "./backend-process.js";
 import { logBackendExit } from "./backend-exit-diagnosis.js";
-import { BACKEND_EXIT_WAIT_MS, registerBackendShutdown } from "./backend-lifecycle.js";
+import { registerDesktopShutdown } from "./desktop-shutdown.js";
 import {
   LINUX_DESKTOP_ENTRY_FILENAME,
   PRODUCT_NAME,
@@ -164,13 +164,8 @@ import { hiddenWindowConstructor } from "./hidden-windows.js";
 import {
   installProductionApplicationLogging,
   readApplicationLogPolicy,
-  registerApplicationLoggingShutdown,
 } from "./application-logging.js";
-import {
-  claimDesktopLogging,
-  exitApplication,
-  registerEssentialShutdown,
-} from "./essential-logging.js";
+import { claimDesktopLogging, exitApplication } from "./essential-logging.js";
 import { createAppImageUpdater } from "./appimage-update.js";
 import {
   browserPreviewPartitionForWindow,
@@ -279,7 +274,6 @@ applyLogDetail(readApplicationLogPolicy(app.getPath("userData")).detail);
 // Must follow the userData override and precede installing any persistent writer.
 // A rejected secondary launch continues module evaluation until app.quit settles.
 const { isPrimaryInstance, essentialLog } = claimDesktopLogging(app, app.getPath("userData"));
-const ESSENTIAL_LOG_STOP_WAIT_MS = 2_000;
 const applicationLogging =
   isPrimaryInstance && runtimeFlavor === "production"
     ? installProductionApplicationLogging({ dataDir: app.getPath("userData") })
@@ -1458,6 +1452,7 @@ async function startApplication(): Promise<void> {
       if (!splash.isDestroyed()) splash.close();
     }
   }
+  if (quitReopen.isQuitting()) return;
   const catalogueStore = new NativeDeviceCatalogueStore(path.join(dataDir, "connections"));
   let localStartError: Error | null = null;
   const startLocal = () =>
@@ -1674,22 +1669,14 @@ if (isPrimaryInstance) {
   });
 }
 
-const backendShutdown = registerBackendShutdown(app, backendProcess);
+const essentialShutdown = registerDesktopShutdown({
+  app,
+  backend: backendProcess,
+  applicationLogging,
+  essentialLog,
+  relaunchImage: (image) => relaunchApplication(app, undefined, image),
+});
 // The loopback handoff page only exists while a sign-in is pending.
 app.on("will-quit", () => {
   void previewExternalHandoff.close().catch(() => undefined);
 });
-// The backend's drain is logged through this process: flush after it.
-registerApplicationLoggingShutdown(app, applicationLogging, undefined, {
-  settled: backendShutdown.stopped,
-  timeoutMs: BACKEND_EXIT_WAIT_MS,
-});
-const essentialShutdown = essentialLog
-  ? registerEssentialShutdown({
-      app,
-      backendStopped: backendShutdown.stopped,
-      essentialLog,
-      timeoutMs: BACKEND_EXIT_WAIT_MS + ESSENTIAL_LOG_STOP_WAIT_MS,
-      relaunchImage: (image) => relaunchApplication(app, undefined, image),
-    })
-  : null;

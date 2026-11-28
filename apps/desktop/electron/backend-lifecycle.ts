@@ -1,5 +1,6 @@
 import { registerWillQuitHold } from "./application-logging.js";
 import type { BackendHttpClient, BackendProcess } from "./backend-process.js";
+import type { SignalQuitDeadlines } from "./quit-signals.js";
 import { createLogger } from "@orkestrator/protocol/logger";
 
 const log = createLogger("desktop");
@@ -37,24 +38,38 @@ export function createBackendWebClientControls(getBackend: () => WebClientBacken
 export const BACKEND_EXIT_WAIT_MS = 20_000;
 
 /**
- * Stops the backend when Electron begins quitting and holds the quit until it
- * has exited. The packaged backend runs from inside the app bundle, and an
- * update swaps that bundle as soon as this process exits; the relaunched app
- * would also start a second backend on the same data directory while the first
- * was still draining.
+ * The backend hold releases at its normal timeout. Other ordinary holds can
+ * still observe a later close, including the AppImage relaunch confirmation.
+ * During a signal quit they share the earlier deadline for waiting on the drain.
  */
 export function registerBackendShutdown(
   app: Pick<Electron.App, "on" | "quit">,
   backendProcess: Pick<BackendProcess, "stop">,
   timeoutMs = BACKEND_EXIT_WAIT_MS,
+  signalQuit?: SignalQuitDeadlines,
 ): { stopped(): Promise<void> } {
-  let stopped: Promise<void> | null = null;
+  const closed = Promise.withResolvers<void>();
+  const stopped = signalQuit
+    ? Promise.race([
+        closed.promise,
+        signalQuit.backendExpired.then(() => {
+          throw new Error("The backend did not exit before the termination signal deadline");
+        }),
+      ])
+    : closed.promise;
+  // Each reader handles the outcome; this keeps an unread one from being fatal.
+  stopped.catch(() => undefined);
+  let stopRequested = false;
   app.on("before-quit", () => {
-    if (!stopped) {
-      log.info("quit.stopping-backend");
-      stopped = backendProcess.stop();
+    if (stopRequested) return;
+    stopRequested = true;
+    log.info("quit.stopping-backend");
+    try {
+      closed.resolve(backendProcess.stop());
+    } catch (error) {
+      closed.reject(error);
     }
   });
-  registerWillQuitHold(app, () => stopped ?? Promise.resolve(), timeoutMs);
-  return { stopped: () => stopped ?? Promise.resolve() };
+  registerWillQuitHold(app, () => stopped, timeoutMs, signalQuit?.holdsExpired);
+  return { stopped: () => stopped };
 }

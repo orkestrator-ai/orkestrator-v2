@@ -141,11 +141,11 @@ either to the maintainer: `mise run release:desktop` on the Mac, and the Linux
 half from the same Mac with `mise run release:linux -- build`, which reaches
 the Linux builder (`omarchy-hp`) over SSH and fetches from GitHub over HTTPS
 through the builder's `gh`. Run `mise run release:linux -- check` first rather
-than guessing hosts. `release:publish` publishes the npm package through the
-"Publish npm package" GitHub workflow (trusted publishing, with provenance);
-the only human step is a reviewer approving its `npm-publish` deployment on
-GitHub, which raises a desktop notification. Pass the run's address to the user
-at once.
+than guessing hosts. While trusted publishing is deferred, use
+`mise run release:publish -- --npm-local`. If npm asks for browser approval,
+pass the sign-in link to the user at once. After trusted publishing is set up,
+`mise run release:publish` uses the GitHub workflow, whose `npm-publish`
+deployment needs reviewer approval. Pass its run address to the user at once.
 Details: [`docs/development/releasing.md`](docs/development/releasing.md).
 
 ## Background Work and Transport Invariants

@@ -4,7 +4,7 @@ Checked against `main` at `06297124` (2026-10-23).
 
 ## Task analysis
 
-Analysed 2026-11-11 against `main` at `498b68766`.
+Analysed 2026-11-11 against `main` at `498b68766`. Updated 2026-11-28 against `main` at `a8e5ea708`: the user's 2026-11-26 answer to 7568's 0025 task 6 (none yet) is decision 13 under Assumptions and decisions.
 
 ### Tasks
 
@@ -343,8 +343,10 @@ and real review stacks; batch them with
 ### Deferred until measured
 
 The product decisions gated on the measurements (presets, adaptive stopping, a
-different default panel) are in 7568 (0025 task 6). Lenses shipped on
-2026-10-29 (see **Current state**).
+different default panel) are in 7568 (0025 task 6). On 2026-11-26 the user
+chose none of them yet: wait for the 7568 results of 0025 tasks 2 to 4, then
+consider the presets first (decision 13). Lenses shipped on 2026-10-29 (see
+**Current state**).
 
 ## Constraints and rationale
 
@@ -533,6 +535,21 @@ and about 1% higher for the two-reviewer cases.
     `usage.ts` and `acp-session.ts`. The comparison against turn counts waits
     for the 7568 panels; the file stays open (blocked) for that reading only.
 
+13. **Task 6 (in 7568): none yet, presets first once measured (the user,
+    2026-11-26).**
+    - Options: Quick, Balanced and Thorough presets that expand into
+      ordinary, editable reviewer rows (the recommended first build);
+      opt-in adaptive stopping with a minimum panel and a measured novelty
+      rule; a change to the default two-reviewer panel; none of these yet.
+    - Choice: none of these yet.
+    - Why: the measurements the choice rests on (7568: 0025 task 2's
+      consolidation comparison on more samples and models, task 3's
+      prefix-cache readings and task 4's overlap from real panels) are not
+      recorded, so no reviewer counts or models are chosen.
+    - Next: when those results are recorded, the presets are the first thing
+      to consider. The 7568 item stays open, waiting on them; nothing is
+      built until the user then picks.
+
 ## Related
 
 - [0027-multi-review-scale-and-cost.md](0027-multi-review-scale-and-cost.md): control-plane
@@ -542,7 +559,7 @@ and about 1% higher for the two-reviewer cases.
   budgets.
 - [`review-preparation.md`](../../architecture/review-preparation.md#panel-value-measurements):
   overlap counts, cache reads, the corpus and the evaluation script.
-- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the billed rounds of task 2, the real panels of task 3, task 4, task 6) moved there on 2026-11-10.
+- [Manual-test checklist](../manual-test/7568-manual-test-checklist.md): the human-only parts of this to-do (the billed rounds of task 2, the real panels of task 3, task 4, task 6) moved there on 2026-11-10; the user answered task 6 with "none yet" on 2026-11-26 (decision 13).
 
 ## Replaces
 

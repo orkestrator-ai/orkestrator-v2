@@ -13,17 +13,19 @@ Analysed 2026-11-19 against `main` at `5e9835d0a`. Phase 1 (2026-11-15) wrote
 the design and the polling baseline. On 2026-11-19 the user's ticket
 ("Push live updates efficiently with performance budgets") asked for the
 layer to be built, which answers the design review that tasks 2 to 7 waited
-on. Every task is built: the layer's core and the `native-session` topic
+on. The shipped layer includes the core and the `native-session` topic
 (task 3), bridge state revisions in all five HTTP bridges as the observer's
 change signal (task 2), the `environment`, `workflow`, `tool-output` and
 `review-transcript` topics, with every workflow-status and transcript poll
-moved onto them (task 4), the command-node subscription controller (task 6)
-and the
-measurement against the baseline (task 7, on a deterministic fixture and the
-credential-free live spec B). The living doc is
-[push-events.md](../../architecture/push-events.md) (task 5). The only item
-left is the billed real-Claude rerun of baseline A, which needs the user and
-is in the [manual-test checklist](../manual-test/7568-manual-test-checklist.md).
+moved onto them (task 4), and the command-node subscription controller
+(task 6). The first measurements used a deterministic fixture and the
+credential-free live spec B (task 7). The living doc is
+[push-events.md](../../architecture/push-events.md) (task 5). Updated
+2026-11-28 at `a8e5ea708`: the billed real-Claude rerun of baseline A ran on
+beelink with the user's approval and passed (task 7). The one-viewer runs
+measured 2.2 requests a second with polling and 0.12 with push. One observer
+served both push viewers. The node controller check across two live profiles
+remains open as [task 8](#8-qualify-the-node-subscription-controller-across-two-live-profiles).
 See [Assumptions and decisions](#assumptions-and-decisions).
 
 ### Tasks
@@ -34,7 +36,8 @@ See [Assumptions and decisions](#assumptions-and-decisions).
 4. **Further surfaces**: measure the other live surfaces' request volume, then move them onto the layer one at a time, highest volume first. Status: done (2026-11-19) for every surface the ticket names (environment lifecycle, attention, workflow status including Auto-pipeline and the Multi Review PR step, reviewer and step transcripts, command output); the polls of surfaces it does not name (C02, C06, C07) are listed under task 4.
 5. **Promote the design to a living doc**: [push-events.md](../../architecture/push-events.md), linked from `event-snapshot-recovery.md` and `recurring-work.md`. Status: done (2026-11-19); this file keeps the design and the decision record.
 6. **Node subscription controller (D10)**: let a window subscribe to a node it reaches through a command node, through a controller on the command node that unions and reference-counts downstream sets. Status: done (2026-11-19).
-7. **Measure the result against the baseline**: repeat baselines A and B on the new commit, one and two viewers, and the reconnect and inactive-view cases. Status: done (2026-11-19) on the deterministic fixture and live spec B; the billed real-Claude rerun of baseline A is in the manual-test checklist.
+7. **Measure the result against the baseline**: repeat baselines A and B on the new commit, one and two viewers, and the reconnect and inactive-view cases. Status: done (2026-11-19 on the deterministic fixture and live spec B; 2026-11-28 the billed real-Claude rerun of baseline A on beelink).
+8. **Qualify the node subscription controller across two live profiles**: exercise shared leaf subscriptions and recovery through the command node. Status: open.
 
 ### 1. Design and baseline
 
@@ -346,8 +349,9 @@ metrics are in `/__orkestrator/metrics` under `push`.
   real gateway, push layer, `NativeAgentService` and `HttpBridgeProvider`
   against a counting fake Claude bridge, manual clock). Quiet running
   session: 120 to 2 reads a minute per viewer (98.3% fewer), 172,560 to
-  2,876 wire bytes a minute per viewer, bridge requests 600 a minute to 8.2
-  with a revisions bridge. A second viewer adds no bridge reads (polling
+  2,876 uncompressed socket bytes a minute per viewer (HTTP and SSE,
+  including framing), and 600 to 8.2 bridge requests a minute with a
+  revisions bridge. A second viewer adds no bridge reads (polling
   doubled them). Change to view, p95: 201 ms for a continuously streamed
   delta, 51 ms for a single change, 52 ms for an announced one, against 452
   to 751 ms polling. Streaming costs one read per frame per viewer (383 a
@@ -361,14 +365,105 @@ metrics are in `/__orkestrator/metrics` under `push`.
   closed.
 - **Live spec B** (credential-free, Claude, isolated profile): bridge state
   polls with two viewers 40 in 20 s against the baseline's 80.
-- **Not run:** baseline A with real Claude (billed), in the manual-test
-  checklist.
+- **Live spec A, real Claude (2026-11-28).** The details are below.
+
+**Live spec A, real Claude (2026-11-28).** Host beelink (Linux x64, other
+work running), commit `a8e5ea708`. Isolated profile `push-quiet-beelink`
+(`--headless`, `ORKESTRATOR_HOST_REACHABILITY_CHECK=off`), using the host's
+Claude login through `--credential-source claude`. The spec selects the
+catalogue's Haiku entry (`modelId` in the spec); the profile log that would
+name the model was removed by `dev:reset`, so the model id was not read
+back. Billed turns: three. `running-quiet` sends two (the quiet turn and the
+reconnect turn) and `running-quiet-two-viewers` sends one; each turn runs a
+foreground `sleep` tool call. Both cases passed in 238.7 s, each at the
+first attempt. Commands, run with every inherited `ORKESTRATOR_*`,
+`CLAUDE*` and `ANTHROPIC*` variable and `NODE_ENV` unset (see
+[Assumptions and decisions](#task-7-real-claude-baseline-a-on-beelink-2026-11-28)):
+
+```bash
+ORKESTRATOR_HOST_REACHABILITY_CHECK=off mise run dev:test --profile push-quiet-beelink \
+  --fixture --headless --credential-source claude --agent-platforms claude
+ORKESTRATOR_AGENT_TEST_PROFILE=push-quiet-beelink ORKESTRATOR_AGENT_TEST_RUN_ID=push-quiet-beelink \
+  ORKESTRATOR_AGENT_TEST_LIVE_TAB_REQUESTS=1 ORKESTRATOR_HOST_REACHABILITY_CHECK=off \
+  mise run test:logged -- --name push-quiet -- bunx playwright test \
+  --config e2e/agent-testing/playwright.browser.config.ts agent-tab-requests-live.spec.ts \
+  --workers=1 --reporter=line --grep running-quiet
+```
+
+The spec doesn't record the `push` block, so a side process polled
+`/__orkestrator/metrics` every 2 s and kept only the `push` block. The
+one-viewer push sample covers 22.095 s of that 40 s browser window, because
+the poller started late. The two-viewer push sample covers 38.221 s of its
+40 s browser window. Session invoke wire bytes sum the request and response
+headers and bodies for the browser's session-scoped `/__orkestrator/invoke`
+calls. The side poller reports push frame bytes separately.
+
+| Measure | Baseline A, one viewer | Push, one viewer | Push, two viewers (first / second) |
+| --- | --- | --- | --- |
+| Requests in 40 s | 88 (84 live updates, 4 discovery) | 5 (3 live updates, 2 discovery) | 5 / 4 (3 / 3 live updates, 2 / 1 discovery) |
+| Requests a second | 2.20 | 0.12 | 0.12 / 0.10 |
+| Session invoke wire bytes in 40 s | 228,813 | 17,223 | 17,221 / 15,587 |
+| Live update answers (gateway) | 84; 126,739 B | 3; 3,326 B (1.1 KB average) | 6; 6,654 B (1.1 KB average) |
+| Discovery answers (gateway) | 4; 129,636 B | 2; 33,670 B (16.8 KB average) | 3; 66,859 B (22.3 KB average) |
+| `push`: frames; change entries; frame bytes | — | 1; 1; 260 B | 2; 2; 516 B (one change published, one frame to each viewer) |
+| `push`: `native-session` observer reads; wakes; bridge wakes | — | 2; 3; 1 | 3; 3; 1 |
+| `push`: subscriptions; observed keys; observers; bridge observers | — | 1; 1; 1; 1 | 2; 1; 1; 1 |
+| `push`: back-pressure holds, pending entries, resyncs, denials, set refusals | — | all 0 | all 0 |
+| Reconnect: first read after the page came back online | 57 ms | 51 ms | — |
+
+Against the expected result
+([push-events.md](../../architecture/push-events.md#measured-result)):
+
+- **96% fewer recurring reads per viewer.** The browser recorded 3 live
+  updates per viewer in 40 s (4.5 a minute). The deterministic fixture's
+  quiet session stayed unchanged at 2 reads a minute (98.3% fewer). The
+  sampled push interval in each run (22.095 s and 38.221 s, respectively)
+  captured one session change (`changesPublished` +1, `native-session`
+  `changes` +1). The frame-triggered read was one observed contributor per
+  viewer. The capture leaves the change's content undetermined.
+- **One observer served both viewers.** It made 3 reads in 38.221 s with
+  two viewers and 2 reads in 22.095 s with one. The change went out as one
+  frame to each viewer. These gateway counters measure observer reads.
+- **92.5% fewer session invoke wire bytes per viewer.** The one-viewer
+  total fell from 228,813 to 17,223 in 40 s. The deterministic fixture counts
+  uncompressed HTTP and SSE socket bytes, including framing, and omits
+  discovery. Discovery carried most of the live gateway response bytes.
+  Its replies averaged 16.8 KB in the one-viewer run and 22.3 KB in the
+  two-viewer run. The gateway aggregates leave individual response sizes
+  and the number of `unchanged` replies undetermined.
 
 **Decisions.**
 
 - **Which runs?** Baselines A and B, one and two viewers, plus the reconnect
   and inactive cases already in `agent-tab-requests-live.spec.ts`
   (recommended): the same specs make the comparison direct.
+
+### 8. Qualify the node subscription controller across two live profiles
+
+**Problem.** Relayed push subscriptions still need verification across two
+running backends.
+
+**Context.** Task 6 covered the controller with unit, relay and gateway
+tests. [D12](#d12-test-strategy) defines the remaining two-profile cases.
+
+**Investigation.** Use the credential-free [two-profile federation
+harness](../../development/agent-testing.md#federation-between-two-profiles-remote-activity-relayed-events).
+Connect two clients to the command node and view distinct sessions on the
+same leaf. Verify both receive push and, while both are subscribed, force
+the relay to replace its leaf stream with a new prefix. Verify that it
+restores the union and resyncs both clients. Then change one client's
+subscription and close that client. Verify the other keeps receiving frames
+after each step. Record the frame delivery and recovery alongside task 6's
+existing evidence.
+
+**Decisions.**
+
+- **Extend the two-profile federation harness (recommended).** Pros: covers
+  the real relay and browser clients with repeatable, credential-free turns.
+  Cons: needs two isolated profiles and browser automation.
+- **Exercise the same cases manually.** Pros: allows interactive inspection
+  of relay replacement and recovery. Cons: requires manual timing and gives
+  less repeatable evidence for future regressions.
 
 ## Current state
 
@@ -383,16 +478,17 @@ work running), commit `a8b89f154` plus this change's spec edits. Raw results
 
 **A. The named workload: `running-quiet`, real Claude (Haiku), 40 s window**,
 one visible tab while the turn waits on a foreground `sleep`, so nothing in
-the session moves. "Wire" is what the page measured (headers and bodies);
-"answer" is the gateway's response-body total. The two-viewer case ran twice
-(the first run's profile was stopped by an unrelated session end after its
-measurement was recorded; the second run passed end to end, 186 s).
+the session moves. Session invoke wire bytes are the page's request and
+response headers and bodies for session-scoped `/__orkestrator/invoke`
+calls. Gateway answer bytes count response bodies. The two-viewer case ran
+twice (the first run's profile was stopped by an unrelated session end after
+its measurement was recorded; the second run passed end to end, 186 s).
 
 | Measure | One viewer | Two viewers, run 1 (first / second) | Two viewers, run 2 (first / second) |
 | --- | --- | --- | --- |
 | Requests | 88 (84 live updates, 4 discovery) | 87 / 88 (84 / 85 live updates, 3 / 3 discovery) | 84 / 83 (83 / 82 live updates, 1 / 1 discovery) |
 | Requests a second | 2.20 | 2.17 / 2.20 (4.37 together) | 2.10 / 2.07 (4.17 together) |
-| Wire bytes | 228,813 (5.7 KB/s) | 219,830 / 222,065 (11.0 KB/s together) | 196,614 / 194,370 (9.8 KB/s together) |
+| Session invoke wire bytes in 40 s | 228,813 (5.7 KB/s) | 219,830 / 222,065 (11.0 KB/s together) | 196,614 / 194,370 (9.8 KB/s together) |
 | Live update answers (gateway) | 84; 126,739 B (1.51 KB each) | 169; 254,467 B (1.51 KB each) | 165; 193,350 B (1.17 KB each) |
 | Discovery answers (gateway) | 4; 129,636 B (32.4 KB each) | 6; 194,808 B (32.5 KB each) | 2; 64,464 B (32.2 KB each) |
 | Gateway handler time per live update | 2.2 ms mean | 1.5 ms mean | 1.5 ms mean |
@@ -997,13 +1093,13 @@ the review:
 
 ## Needs verification
 
-- The one-viewer real-Claude figures come from one run (they agree with
-  1202's 2.1 requests a second) and the two-viewer figures from two. Repeat
-  both on the same host in the billed baseline A rerun (manual-test
-  checklist).
-- The node subscription controller has not run across two live profiles
-  (D12's `federation-two-profile-fake-model.ts` case); it is covered by unit,
-  relay and gateway tests with a fake leaf.
+- The polling baseline on arktech-mini measured 2.2 requests a second for
+  one viewer, in line with 1202's 2.1, and sampled two runs with two
+  viewers. The push rerun of baseline A on beelink (task 7, 2026-11-28)
+  measured 0.12 requests a second for one viewer. The host effect remains
+  unmeasured because the old commit was only run on arktech-mini.
+- [Task 8](#8-qualify-the-node-subscription-controller-across-two-live-profiles)
+  tracks the outstanding two-profile verification.
 
 ## Related
 
@@ -1026,6 +1122,12 @@ the review:
 Nothing; new work from 1202 (retired) task 4 and 6680 (retired) task 2.
 
 ## Assumptions and decisions
+
+### Task 8: track the existing live verification separately from implementation
+
+Task 6's controller implementation and automated checks are complete. The
+existing two-profile check is a numbered backlog task so an agent can pick
+it up and record the result against the D12 cases.
 
 ### Build push as a general event layer (user decision, 2026-11-14)
 
@@ -1203,6 +1305,32 @@ Baseline A uses real Claude turns and is billed, so it cannot run in an
 unattended build. The deterministic fixture covers the same workload
 (`running-quiet`, one and two viewers) and live spec B ran credential-free;
 the billed rerun is in the manual-test checklist.
+
+### Task 7: real-Claude baseline A on beelink (2026-11-28)
+
+The user approved a few billed Haiku turns and asked for the run on beelink.
+Results are under task 7.
+
+- **Inherited environment.** The worker shell descends from the production
+  backend. Its `CLAUDE_CONFIG_DIR`, `CLAUDE_CLI_PATH`, resource root and agent
+  MCP URL (port 45507) all point into the real data directory, and
+  `dev:test` passes its environment through to Electron. Every
+  `ORKESTRATOR_*`, `CLAUDE*` and `ANTHROPIC*` variable and `NODE_ENV` were
+  unset for `dev:test`, `dev:login`, the spec and the clean-up. With
+  `CLAUDE_CONFIG_DIR` unset, the credential source read the default
+  `~/.claude` login (read only, valid for 7.5 hours at the start). The
+  alternative, launching with the shell as it is, would have pointed the
+  profile's Claude lookup at the production agent-account directory.
+- **The `push` block.** The spec records only gateway command deltas, so the
+  `push` block came from a side poller with its own `dev:login` cookie
+  session. The poller kept only the `push` block, and the cookie jar was in
+  a private temporary directory that was deleted afterwards. Changing the
+  spec mid-run, or adding a second run, would have cost more billed turns.
+  The poller started late, so the one-viewer `push` figures cover 22.095 s
+  of the 40 s browser window.
+- **Toolchain.** Host seeding copied the pinned Claude CLI into the profile,
+  the documented path for `--credential-source`. No production binary or
+  backend ran.
 
 ### Task 4: Auto-pipeline rides the `workflow` topic with a digest (2026-11-19)
 

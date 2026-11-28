@@ -148,6 +148,14 @@ then got a default-pool network. The item left the decisions section. The
 evidence is in
 [container qualification](../../development/container-qualification.md#probe-network-sweep-on-beelinks-backlog-2026-11-26).
 
+Updated 2026-11-28: the user installed a disposable display on beelink
+(`xorg-server-xvfb`, `xorg-xauth`, `xdotool`, `imagemagick`, `openbox`) and
+keeps it, answering the 2181 task 1 Linux display host item, which is ticked
+with the answer. An agent ran the whole Electron suite there under Xvfb with
+openbox the same day (2181's Current state, "Real-display run on beelink");
+a covered window paused its polls, so the covered-window decision is now
+needed only if the Windows run shows a covered window staying `visible`.
+
 ### Tasks
 
 1. **Manual tests and live checks** (369 items): run each check under
@@ -155,7 +163,7 @@ evidence is in
 
    [Manual tests and live checks](#manual-tests-and-live-checks) and record
    its result. Status: open.
-2. **Decisions, approvals and outward actions** (21 items): make each call
+2. **Decisions, approvals and outward actions** (20 items): make each call
    or take each action under
    [Decisions, approvals and outward actions](#decisions-approvals-and-outward-actions)
    and record it. Status: open.
@@ -333,12 +341,12 @@ agent can apply it.
 | CLI and slash commands | 6 | 0 |
 | Containers and environments | 34 | 2 |
 | Coordinator and Multi Review | 87 | 3 |
-| Cross-cutting | 106 | 8 |
+| Cross-cutting | 106 | 7 |
 | Design canvas | 5 | 0 |
 | MCP | 8 | 1 |
 | Service previews and web annotations | 18 | 1 |
 | Transcripts, observation and bandwidth | 31 | 2 |
-| **Total** | 369 | 20 |
+| **Total** | 369 | 19 |
 
 
 
@@ -1020,8 +1028,11 @@ None open (both answered on 2026-11-14).
 
 - [ ] **[0032](../cross-cutting/0032-dependency-upgrades.md) task 2: generate and install the update-manifest keys.** When electron-builder 27 is stable, generate two Ed25519 keys with `electron-builder create-update-key` (current and next). Keep the current private key in the password manager and in a mode-600 file outside the repository on the Mac and on the Linux release machine (for `ELECTRON_BUILDER_UPDATE_SIGN_KEY_FILE`); keep the next private key offline in the password manager only. A signed release is a one-way door. Record: both public keys (never a private key) and the key-file path on each release machine, in 0032 under task 2, so an agent can embed `updateManifest.publicKey: [current, next]` and wire `release:desktop`.
 
-- [ ] **[2181](../cross-cutting/2181-dev-test-electron-opens-on-the-linux-desktop.md) task 1 (Linux display host): provide a Linux host with a disposable display for the Electron specs.** Decide whether beelink, or another fleet host, gets Xvfb, and install it if so. Specs must never use the signed-in desktop. The run command is `env -u WAYLAND_DISPLAY -u ELECTRON_OZONE_PLATFORM_HINT xvfb-run -a mise run test:agent:electron` ([agent-testing.md](../../development/agent-testing.md#electron-specs-and-their-display)). Record: the host's name, or "no display host", as a reply to the coordinator. This gives 2181 task 1 a Linux real-display run of the Electron specs, which includes the Linux run of `window-visibility-polls-electron.spec.ts` that 5460 (retired) task 3 asked for (the scheduled CI job of 0031 task 8 can give 2181 the same run first). Until 2026-11-15 this item was filed under 6303 (retired) task 2, whose own display run was then done on mbp3's real macOS display and needs no Linux host. 7062 (retired 2026-11-15) no longer waits on it: its migrated specs and its covering spec ran on mbp3's macOS display instead.
-- [ ] **[2181](../cross-cutting/2181-dev-test-electron-opens-on-the-linux-desktop.md) task 1 (from 5460 (retired) task 3): what to do about a covered Linux window that stays visible.** Whether Chromium sees a covered window on Linux depends on the display server and window manager, so a Linux window another window covers may keep reporting `visible` and keep polling at full rate; hidden and minimised windows pause either way. Under Xvfb with openbox it did pause (2181's Current state, 2026-11-13), and on macOS a covered window paused too (`mbp3`, 2026-11-15), so this is needed only if the `covered` step of the `desktop-window-polls` attachment from 2181 task 1's Linux run (the scheduled CI job's first runs, 0031 task 8, or the fleet host of the 2181 task 1 Linux display host item above) or the Windows item above shows `visible`. Decide then: either
+- [x] **[2181](../cross-cutting/2181-dev-test-electron-opens-on-the-linux-desktop.md) task 1 (Linux display host): provide a Linux host with a disposable display for the Electron specs.** Decide whether beelink, or another fleet host, gets Xvfb, and install it if so. Specs must never use the signed-in desktop. The run command is `env -u WAYLAND_DISPLAY -u ELECTRON_OZONE_PLATFORM_HINT xvfb-run -a mise run test:agent:electron` ([agent-testing.md](../../development/agent-testing.md#electron-specs-and-their-display)). Record: the host's name, or "no display host", as a reply to the coordinator. This gives 2181 task 1 a Linux real-display run of the Electron specs, which includes the Linux run of `window-visibility-polls-electron.spec.ts` that 5460 (retired) task 3 asked for (the scheduled CI job of 0031 task 8 can give 2181 the same run first). Until 2026-11-15 this item was filed under 6303 (retired) task 2, whose own display run was then done on mbp3's real macOS display and needs no Linux host. 7062 (retired 2026-11-15) no longer waits on it: its migrated specs and its covering spec ran on mbp3's macOS display instead.
+
+  Answered 2026-11-28 by the user: beelink is the fleet's Linux display host. The user installed `xorg-server-xvfb`, `xorg-xauth`, `xdotool`, `imagemagick`, `openbox` and `vim` there on 2026-11-28 and keeps them ([agent-testing.md](../../development/agent-testing.md#electron-specs-and-their-display)). The same day an agent ran the whole suite there on a throwaway display, `env -u DISPLAY -u WAYLAND_DISPLAY -u ELECTRON_OZONE_PLATFORM_HINT xvfb-run -a -s "-screen 0 1280x800x24" dbus-run-session -- <wrapper>`, where the wrapper started openbox and then `mise run test:agent:electron`. Result: 81 passed, 6 skipped, 1 failed, 1341 s, and nothing reached the signed-in desktop. The failure was `terminal-input-resume-electron.spec.ts`, which fails on any 1280x800 screen, with or without openbox, and passes on 1920x1200. Details are in 2181's Current state, "Real-display run on beelink".
+
+- [ ] **[2181](../cross-cutting/2181-dev-test-electron-opens-on-the-linux-desktop.md) task 1 (from 5460 (retired) task 3): what to do about a covered Linux window that stays visible.** Whether Chromium sees a covered window on Linux depends on the display server and window manager, so a Linux window another window covers may keep reporting `visible` and keep polling at full rate; hidden and minimised windows pause either way. Under Xvfb with openbox it did pause (2181's Current state, 2026-11-13), and on macOS a covered window paused too (`mbp3`, 2026-11-15). On the fleet's Linux display host it paused as well: on beelink on 2026-11-28, under Xvfb with openbox, the `covered` step reported `isVisible()` true but the document `hidden`, the coordinator paused and 0 reads, and `uncovered` read again (9 reads in 2 s). That was in the whole suite and in a run of the spec alone (2181's Current state, "Real-display run on beelink"). So the Linux run this item waited on does not need the decision. It is still needed only if the `covered` step of the `desktop-window-polls` attachment shows `visible` in the Windows item above, or in the first runs of the scheduled CI job (0031 task 8, whose Xvfb has no window manager). Decide then: either
   - also pause polls on the window's blur and occlusion events relayed from the main process (recommended; covers what the page cannot see itself, and the read coordinator already takes a host-hidden input, `setHostHidden`, but it is a new desktop-to-renderer signal with its own row in [version compatibility](../../architecture/version-compatibility.md#register)); or
   - accept it (no change, but a covered Linux window keeps polling at full rate).
 

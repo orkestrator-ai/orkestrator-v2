@@ -432,12 +432,12 @@ agent can apply it.
   Record: pass/fail per step with result paths, under the matching provider in [upgrade-agents.md](../../development/upgrade-agents.md) (1020 and 1031 are retired).
 
   Run on 2026-11-28 on mbp3 (profile `qa-signin-batch`, `main` at `a2fd20d91`, with Claude 2.1.326 / SDK 0.3.326, Codex 0.169.0, OpenCode 2.3.1, Pi 1.5.2, Cursor SDK 1.4.1 and Grok 1.0.88; the record is under each provider, starting with [Claude](../../development/upgrade-agents.md#signed-in-checks-at-the-2026-11-28-pins)). Results:
-  - Step 3, the Codex web-search canary: passed.
-  - Step 5, Claude: passed, local and container, for streaming, a question, abort, resume, model discovery and a background task. The first container prompt after a resume came back `ok: false` once, with no row, and the retry worked.
+  - Step 3, the Codex web-search canary: passed. No saved result log was available. See the [Codex run record](../../development/upgrade-agents.md#signed-in-checks-at-the-2026-11-28-pins-codex).
+  - Step 5, Claude: question, abort, resume, model discovery and background task passed locally and in the container. The first container prompt after resume came back `ok: false` once, with no row, and the retry worked. Streaming remains unverified in both sessions because the saved evidence shows completion without incremental output. See the [Claude run record](../../development/upgrade-agents.md#signed-in-checks-at-the-2026-11-28-pins) for the receipts and captures.
   - Step 1 (Grok), steps 2 and 6 (Cursor) and step 3's Cursor and Grok parts: not run, no valid login. Grok's host login expired at 2026-11-27T01:28Z; the profile found no unexpired Cursor key. Nobody signed in.
   - Step 3's `slash-command-inactive.spec.ts`: not run. It supports only Codex and Claude, so it cannot run for OpenCode, Cursor, Grok or Pi as written.
   - Step 4: not run; reading `~/.codex` needs your OK.
-  - Left: steps 1, 2, 4 and 6, and step 3's slash part.
+  - Left: steps 1, 2, 4 and 6, step 3's slash part, and step 5's streaming check in both a local and a container session. Verify that partial reply text appears before the turn completes.
 
 - [ ] **1031 (retired) task 9 (signed-in part): signed-in runs at the 2026-11-06 pins.** Throwaway `dev:test` profile with real logins for every platform, on a host whose firewall lets Docker reach the agent-tools port (see the firewall item below).
   1. The billed coordinator-skills probe: `CLAUDE_CLI_PATH=<managed claude> bun src/services/coordinator-skills.live-probe.ts` from `bridges/claude-bridge`.
@@ -447,13 +447,13 @@ agent can apply it.
   Record: pass/fail per step with result paths, under the matching provider in [upgrade-agents.md](../../development/upgrade-agents.md) (1031 is retired).
 
   Run on 2026-11-28 on mbp3 in the same profile as the item above (record under each provider, starting with [Claude](../../development/upgrade-agents.md#signed-in-checks-at-the-2026-11-28-pins)). Results:
-  - Step 1, the coordinator-skills probe: passed.
-  - Step 2: passed for the signed-in Pi session and for OpenCode and Pi close retention.
-  - Step 3, on Claude: switch, sub-agent card and compaction passed.
-  - Step 3, on OpenCode: switch, sub-agent card and compaction passed.
-  - Step 3, on Codex: switch and sub-agent card passed. Compaction **failed**: `/compact` ended after the bridge's 5-minute backstop with "Codex never reported that compaction finished" (bug candidate; 0.169.0's protocol marks `thread/compacted` deprecated).
-  - Step 3, on Pi: the switch passed. The sub-agent card does not apply (Pi has no sub-agent tool). Compaction was not exercised: "Nothing to compact (session too small)".
-  - Step 4: the "every scenario" test of `goals-live.spec.ts` passed on Claude only. It ran against this profile, because `test:agent:goals` profiles seed from the real data directory, and kept to the turn budget.
+  - Step 1 passed for both coordinator-skills probe scenarios. Results are in `output/qa-batch/coordinator-skills-probe.log`.
+  - Step 2 passed for the signed-in Pi session and for OpenCode and Pi close retention. Results are in `output/agent-testing/qa-signin-close/browser/results.json`.
+  - Step 3 passed on Claude for the switch, sub-agent card and compaction. The original tab's transcript capture is in `output/visual-previews/qa-claude-tab1-after-resume.png`.
+  - Step 3, on OpenCode: switch, sub-agent card and compaction passed. No saved capture was available.
+  - Step 3 passed on Codex for the switch and sub-agent card. Compaction **failed**. `/compact` ended after the bridge's 5-minute backstop with "Codex never reported that compaction finished" (bug candidate). The transcript captures are in `output/visual-previews/qa-codex-switch-subagent-compact.png` and `output/visual-previews/qa-codex-compact-failed-details.png`.
+  - Step 3, on Pi: the switch passed and the sub-agent card does not apply (Pi has no sub-agent tool). Successful compaction was unexercised because the session was too small. Each refused attempt still added a `compact_context` card (bug candidate). No saved capture was available for this step.
+  - Step 4 passed on Claude for the "every scenario" test of `goals-live.spec.ts`. It ran against this profile, because `test:agent:goals` profiles seed from the real data directory, and kept to the turn budget. Results are in `output/agent-testing/qa-signin-goals-claude/goals/results.json`.
   - Grok (steps 2 and 3) and Cursor (steps 2 and 3): not run, no valid login.
   - Left: Grok and Cursor for steps 2 and 3, Codex compaction, Pi compaction on a larger session, and step 4's other tests and platforms.
 
@@ -466,13 +466,14 @@ agent can apply it.
 
   Run on 2026-11-28 on mbp3 in the same profile (record under each provider, starting with [Claude](../../development/upgrade-agents.md#signed-in-checks-at-the-2026-11-28-pins)). Results:
   - Task 10: `result_index` is present, but there was no `credential_expires_at` and no "Sign-in ends" line. An agent-test profile hands Claude an access-only token, so this needs a stored claude.ai login, which means signing in; not run.
-  - Task 11: **not shown (bug candidate)**. At 2.1.326 a plain `permissions.ask` rule reaches `canUseTool` with an undeclared `decisionReasonType: "rule"` and no `matchedAskRule`. The card offered "Approve and remember…", and with approvals off the call ran with no card.
+  - Task 11: **unexercised**. The signed-in probe did not produce a callback with either human-required marker.
+  - Separate Claude ask-rule bug candidate. At 2.1.326 a plain `permissions.ask` rule reached `canUseTool` with an undeclared `decisionReasonType: "rule"`. Both `suppressAlwaysAllowRule` and `matchedAskRule` were absent. The ordinary card offered "Approve and remember…" under an Ask policy. With approvals off, the call ran with no card.
   - Task 12: passed for Codex and Claude. Both cards showed a Destructive tag.
   - Task 13: not run. No Cursor or Grok login, and no OpenRouter key; none was added.
   - Task 14: passed for Claude and Pi on a 120 MB disk image, removed afterwards. Both showed the amber "could not be fully saved" line; Pi's turn also failed.
   - Task 15: not run; Grok has no valid login.
   - Also found: `orkestrator session resume` can bind a second tab to a conversation another tab holds. That tab then shows "Native agent session provider collision" (bug candidate).
-  - Left: task 10 with a stored login, task 11 after a fix, task 13 and task 15.
+  - Left: task 10 with a stored login, task 13 and task 15. For task 11, obtain a signed-in Claude `canUseTool` callback carrying `suppressAlwaysAllowRule` or `matchedAskRule` and verify that it shows the "answer this yourself" card.
 
 - [ ] **0008 (retired) task 5: live coordinator suite on OpenCode 2.x.** On a host signed in to OpenCode with a real provider credential, run `mise run test:agent:coordinator --credential-source opencode` (OpenCode 2 is the only line since 2026-11-11, so no setting is needed). Check that each new coordinator conversation starts its own OpenCode server. Record: pass or fail per scenario, the 2.x pin, and any refusal or error text, under "Maintaining the OpenCode integration" in [agent-engines.md](../../architecture/agent-engines.md#maintaining-the-opencode-integration). The design is in "Task 5: coordinators on 2.x" (`git show 17d28238c:docs/todo/agent-engines/0008-opencode-v2.md`).
 - [ ] **0008 (retired) Needs verification: OpenCode 2 turns on a real provider.** Every OpenCode 2 qualification so far used a scripted loopback model (host 2026-11-11, container 2026-11-13). On a disposable `mise run dev:test --profile oc2-real --fixture --credential-source opencode --agent-platforms opencode --headless` profile signed in to a real OpenCode provider, run `ORKESTRATOR_AGENT_TEST_PROFILE=oc2-real ORKESTRATOR_AGENT_TEST_LIVE_IDLE_OBSERVATION=1 ORKESTRATOR_AGENT_TEST_IDLE_PLATFORMS=opencode ORKESTRATOR_AGENT_TEST_IDLE_CASES=approval,steer,no-renderer mise run test:agent:browser -- e2e/agent-testing/idle-observation-live.spec.ts` (billed: a few short turns). Record: pass, fail or not-exercised per case, the provider and model, and any error text, under "Maintaining the OpenCode integration" in [agent-engines.md](../../architecture/agent-engines.md#maintaining-the-opencode-integration). Stop and reset the profile afterwards.

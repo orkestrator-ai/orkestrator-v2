@@ -5,39 +5,6 @@ and the Linux build on a Linux (Arch/Omarchy) machine. Both upload to one GitHub
 release on `orkestrator-ai/orkestrator-v2`, which serves the website download
 links and the in-app updater.
 
-## Pending release note: gateway port migration
-
-Include this note in the next release containing the gateway port fix:
-
-Only the backend using the platform default data directory now defaults to
-port 34121. A service using a custom `--data-dir` without `--port` chooses a free
-port on each start. This affects both secondary services and a sole backend on
-a remote host when it uses a custom data directory. Existing service arguments
-are retained during self-update, so saved direct tailnet addresses such as
-`http://100.x.y.z:34121` can stop connecting after the update.
-
-Before updating, arrange host-side access (for example SSH), choose an available
-port other than 34121 or 34122, and reinstall the service with the same data
-directory and connection flags plus `-- --port PORT`. For example, a direct
-tailnet service can run:
-
-```bash
-bunx orkestrator service install --data-dir /path/to/data --yes -- --host 100.x.y.z --port 45000 --strict-gateway-port
-```
-
-Use the host's actual tailnet address and an available port. Preserve any other
-serve flags from the existing unit. Update saved remote connections to the new
-address printed by the installer. The default data directory keeps 34121;
-explicit port settings remain respected. If updating has already disconnected
-the client, perform the same steps on the host.
-
-New secondary Tailscale Serve installs automatically choose a persistent strict
-port. Older Serve units also recover an owned stale root across an unclean
-restart, using durable ownership or their last instance descriptor; their
-tailnet HTTPS URL stays the same. Unknown or foreign Serve targets remain
-conflicts and require host-side inspection. Development Electron launches now
-use a free browser port and log the bound URL.
-
 ## Pending release note: other machines' workspaces open in the window
 
 Include this note in the next release containing plan items 6001 and 6002:
@@ -258,6 +225,12 @@ the [manual-test checklist](../todo/manual-test/7568-manual-test-checklist.md)):
   published this way, also set the package's
   publishing access to require two-factor authentication and disallow tokens,
   so only the workflow can publish.
+
+The maintainer deferred this setup on 2026-11-26 (the checklist item stays
+open as deferred). Until both settings exist, npm has no trusted publisher
+for the workflow to authenticate as, so publish with `--npm-local` (below).
+Tokens stay allowed on the package; the "disallow tokens" step waits for the
+setup.
 
 If the project moves to another GitHub repository, update the trusted
 publisher entry and the `repository` field of `packages/cli/package.json`
